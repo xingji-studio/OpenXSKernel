@@ -2,7 +2,6 @@
 #ifndef _BOOT_H_
 #define _BOOT_H_
 #include "../efi.h"
-#include "./stdint.h"
 #include "./memory.h"
 typedef struct
 {

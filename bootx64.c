@@ -1,5 +1,3 @@
-// 版权所有©XINGJI Studios 2017-2024 保留所有权利。
-// XJ380UEFI引导程序（\EFI\BOOT\BOOTX64.efi）
 #include "./include/cinclude.h"
 #include "./include/global/memory.h"
 #define NULL 0

@@ -105,6 +105,10 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, struct EFI_SYSTEM_TABLE *SystemTable
   UINTN                     kernel_size   = 4194304;
   void                     *kernel_buffer = malloc(kernel_size);
 
+  SFSP->OpenVolume(SFSP, &root);
+  root->Open(root, &kernel_file, L"\\kernel.elf", EFI_FILE_MODE_READ, 0);
+  kernel_file->Read(kernel_file, &kernel_size, kernel_buffer); // 读取内核，直接读到kernel_buffer
+
   Elf64_Ehdr *ehdr = (Elf64_Ehdr *)kernel_buffer;
   UINT64      kernel_first_addr, kernel_last_addr;                   // 计算的首尾
   CalcLoadAddressRange(ehdr, &kernel_first_addr, &kernel_last_addr); // 计算范围

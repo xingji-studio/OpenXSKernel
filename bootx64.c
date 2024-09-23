@@ -93,7 +93,7 @@ EFI_STATUS GetMMP(MEMORY_MAP *MemoryMap) {
   return GetMemoryMapStatus;
 }
 typedef void (*__attribute__((sysv_abi)) Kernel)(const struct FrameBufferConfig *,
-                                                 struct EFI_SYSTEM_TABLE *, struct BOOT_CONFIG *);
+                                                 struct EFI_SYSTEM_TABLE *, BOOT_CONFIG);
 
 EFI_STATUS efi_main(EFI_HANDLE ImageHandle, struct EFI_SYSTEM_TABLE *SystemTable) {
   efi_init(ImageHandle, SystemTable);
@@ -138,7 +138,7 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, struct EFI_SYSTEM_TABLE *SystemTable
   GetMMP(&BootConfig.MemoryMap);
   
   Kernel kernel = (Kernel)entry_addr;
-  kernel(&config, SystemTable, &BootConfig); // 滚进去！
+  kernel(&config, SystemTable, BootConfig); // 滚进去！
 
   //此处=kernel.elf
 

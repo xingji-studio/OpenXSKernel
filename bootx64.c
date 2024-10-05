@@ -100,14 +100,44 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, struct EFI_SYSTEM_TABLE *SystemTable
 
   ST->ConOut->ClearScreen(ST->ConOut);
 
+  puts(L"OpenXSKernel UEFI Bootloader (Version 1.0.2402)\r\n");
+  puts(L"Copyright(C) XINGJI Interactive Software 2017-2024 All rights reserved.\r\n");
+  puts(L"More Infomation Please Visit https://xingjisoft.top/\r\n");
+
+  puts(L"__  __  __   ___  __    _____        __   __  \r\n");
+  puts(L"\\ \\/ / |  | |   \\|  |  / ____\\      |  | |  | \r\n");
+  puts(L" \\  /  |  | |  \\    | | | ____   __ |  | |  | \r\n");
+  puts(L" /  \\  |  | |  |\\   | | \\|__  | |  ||  | |  | \r\n");
+  puts(L"/_/\\_\\ |__| |__| \\__|  \\_____/  \\______| |__| \r\n");
+
+  puts(L"Loading OS...\r\n");
+  
+  puts(L"[ SUCCESS ] Initializing UEFI\r\n");
+
+  EFI_STATUS                status;
   EFI_PHYSICAL_ADDRESS      entry_addr;
   struct EFI_FILE_PROTOCOL *root, *kernel_file;
   UINTN                     kernel_size   = 4194304;
   void                     *kernel_buffer = malloc(kernel_size);
 
-  SFSP->OpenVolume(SFSP, &root);
-  root->Open(root, &kernel_file, L"\\kernel.elf", EFI_FILE_MODE_READ, 0);
-  kernel_file->Read(kernel_file, &kernel_size, kernel_buffer); // 读取内核，直接读到kernel_buffer
+  status = SFSP->OpenVolume(SFSP, &root);
+  if (EFI_ERROR(status)) {
+    puts(L"[ FAIL ] Loading File System\r\n");
+    while (1);
+  }
+  puts(L"[ SUCCESS ] Loading File System\r\n");
+  status = root->Open(root, &kernel_file, L"\\kernel.elf", EFI_FILE_MODE_READ, 0);
+  if (EFI_ERROR(status)) {
+    puts(L"[ FAIL ] Loading OS Files\r\n");
+    while (1);
+  }
+  status = kernel_file->Read(kernel_file, &kernel_size,
+                             kernel_buffer); // 读取内核，直接读到kernel_buffer
+  if (EFI_ERROR(status)) {
+    puts(L"[ FAIL ] Loading OS Files\r\n");
+    while (1);
+  }
+  puts(L"[ SUCCESS ] Loading OS Files\r\n");
 
   Elf64_Ehdr *ehdr = (Elf64_Ehdr *)kernel_buffer;
   UINT64      kernel_first_addr, kernel_last_addr;                   // 计算的首尾
@@ -125,8 +155,10 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, struct EFI_SYSTEM_TABLE *SystemTable
   case PixelRedGreenBlueReserved8BitPerColor: config.pixel_format = kRGBR; break;
   case PixelBlueGreenRedReserved8BitPerColor: config.pixel_format = kBGRR; break;
   default:
+    puts(L"[ FAIL ] Loading Graphics\r\n");
     while (1);
   }
+  puts(L"[ SUCCESS ] Loading Graphics\r\n");
 
   BOOT_CONFIG BootConfig;
   BootConfig.MemoryMap.MapSize = 4096;
@@ -136,8 +168,10 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, struct EFI_SYSTEM_TABLE *SystemTable
   BootConfig.MemoryMap.DescriptorVersion = 0;
 
   GetMMP(&BootConfig.MemoryMap);
+  puts(L"[ SUCCESS ] Getting Memory Map\r\n");
   
   Kernel kernel = (Kernel)entry_addr;
+  puts(L"Operating System Boot Success.\r\n");
   kernel(&config, SystemTable, &BootConfig); // 滚进去！
 
   //此处=kernel.elf

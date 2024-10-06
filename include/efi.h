@@ -241,32 +241,40 @@ struct EFI_GRAPHICS_OUTPUT_BLT_PIXEL {
   unsigned char Reserved;
 };
 
-enum EFI_GRAPHICS_PIXEL_FORMAT {
-  PixelRedGreenBlueReserved8BitPerColor,
-  PixelBlueGreenRedReserved8BitPerColor,
-  PixelBitMask,
-  PixelBltOnly,
-  PixelFormatMax
-};
+typedef enum {
+    PixelRedGreenBlueReserved8BitPerColor,
+    PixelBlueGreenRedReserved8BitPerColor,
+    PixelBitMask,
+    PixelBitOnly,
+    PixelFormatMax
+} EFI_GRAPHICS_PIXEL_FORMAT;
 
-struct EFI_GRAPHICS_OUTPUT_PROTOCOL {
-  UINTN _buf[3];
-  struct EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE {
+typedef struct {
+    UINT32 Version;
+    UINT32 HorizontalResolution;
+    UINT32 VerticalResolution;
+    EFI_GRAPHICS_PIXEL_FORMAT PixelFormat;
+    UINT32 PixelInformation[4];
+    UINT32 PixelsPerScanLine;
+} EFI_GRAPHICS_OUTPUT_MODE_INFORMATION;
+
+typedef struct {
     UINT32 MaxMode;
     UINT32 Mode;
-    struct EFI_GRAPHICS_OUTPUT_MODE_INFORMATION {
-      UINT32                         Version;
-      UINT32                         HorizontalResolution;
-      UINT32                         VerticalResolution;
-      enum EFI_GRAPHICS_PIXEL_FORMAT PixelFormat;
-      UINT32                         PixelInformation[4];
-      UINT32                         PixelsPerScanLine;
-    }                   *Info;
-    UINTN                SizeOfInfo;
-    EFI_PHYSICAL_ADDRESS FrameBufferBase;
-    UINTN                FrameBufferSize;
-  } *Mode;
-};
+    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *Info;
+    UINTN SizeOfInfo;
+    UINTN FrameBufferBase;
+} EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE;
+
+typedef struct EFI_GRAPHICS_OUTPUT_PROTOCOL {
+    EFIAPI EFI_STATUS (*QueryMode)(struct EFI_GRAPHICS_OUTPUT_PROTOCOL *This, unsigned int ModeNumber, unsigned long long *SizeOfInfo, EFI_GRAPHICS_OUTPUT_MODE_INFORMATION **Info);
+
+    EFIAPI EFI_STATUS (*SetMode)(struct EFI_GRAPHICS_OUTPUT_PROTOCOL *This, unsigned int ModeNumber);
+
+    UINTN pad;
+
+    EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *Mode;
+} EFI_GRAPHICS_OUTPUT_PROTOCOL;
 
 
 

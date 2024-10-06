@@ -1,5 +1,6 @@
 #include "./include/cinclude.h"
 #include "./include/global/memory.h"
+#include "./settings.h"
 #define NULL 0
 struct EFI_SYSTEM_TABLE                *ST;  // 系统表
 struct EFI_BOOT_SERVICES               *BS;  // 启动信息
@@ -92,13 +93,29 @@ EFI_STATUS GetMMP(MEMORY_MAP *MemoryMap) {
 
   return GetMemoryMapStatus;
 }
+
+void SwitchToResolution(unsigned int x, unsigned int y)
+{
+    unsigned long long sizeofInfo = 0;
+    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info;
+    for (unsigned int i = 0; i < GOP->Mode->MaxMode; i++) {
+        GOP->QueryMode(GOP, i, &sizeofInfo, &info);
+
+        if (info->HorizontalResolution == x && info->VerticalResolution == y) {
+            GOP->SetMode(GOP, i);
+        }
+    }
+}
+
 typedef void (*__attribute__((sysv_abi)) Kernel)(const struct FrameBufferConfig *,
-                                                 struct EFI_SYSTEM_TABLE *, struct BOOT_CONFIG *);
+                                                 struct EFI_SYSTEM_TABLE *, BOOT_CONFIG *);
 
 EFI_STATUS efi_main(EFI_HANDLE ImageHandle, struct EFI_SYSTEM_TABLE *SystemTable) {
   efi_init(ImageHandle, SystemTable);
 
   ST->ConOut->ClearScreen(ST->ConOut);
+
+  SwitchToResolution(SCR_X, SCR_Y);
 
   puts(L"OpenXSKernel UEFI Bootloader (Version 1.0.2402)\r\n");
   puts(L"Copyright(C) XINGJI Interactive Software 2017-2024 All rights reserved.\r\n");

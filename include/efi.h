@@ -123,6 +123,8 @@ typedef struct {
   UINT64 Attribute;
 }  __attribute__((__aligned__(16))) EFI_MEMORY_DESCRIPTOR;
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
 
 static void xmemset(void *dst_, UINT8 value, UINTN size) {
   UINT8 *dst = (UINT8 *)dst_;
@@ -137,6 +139,8 @@ static void *xmemcpy(void *dst_, const void *src_, UINTN size) {
     *dst++ = *src++;
   return (void *)src_;
 }
+
+#pragma GCC diagnostic pop
 
 struct EFI_BOOT_SERVICES {
   char _buf1[24];
@@ -215,6 +219,14 @@ struct EFI_SYSTEM_TABLE {
   struct EFI_BOOT_SERVICES *BootServices;
 };
 
+struct EFI_SIMPLE_POINTER_STATE {
+    INT32 RelativeMovementX;      /* X轴方向的相对移动量 */
+    INT32 RelativeMovementY;      /* Y轴方向的相对移动量 */
+    INT32 RelativeMovementZ;      /* Z轴方向的相对移动量 */
+    BOOLEAN LeftButton;   /* 左键状态，按下为1，松开为0 */
+    BOOLEAN RightButton;  /* 右键状态，同上 */
+};
+
 // 简单（鼠标）指针协议
 struct EFI_SIMPLE_POINTER_PROTOCOL {
     EFIAPI EFI_STATUS (*Reset)(
@@ -224,14 +236,6 @@ struct EFI_SIMPLE_POINTER_PROTOCOL {
         struct EFI_SIMPLE_POINTER_PROTOCOL *This,
         struct EFI_SIMPLE_POINTER_STATE *State);
     void *WaitForInput;
-};
-
-struct EFI_SIMPLE_POINTER_STATE {
-    INT32 RelativeMovementX;      /* X轴方向的相对移动量 */
-    INT32 RelativeMovementY;      /* Y轴方向的相对移动量 */
-    INT32 RelativeMovementZ;      /* Z轴方向的相对移动量 */
-    BOOLEAN LeftButton;   /* 左键状态，按下为1，松开为0 */
-    BOOLEAN RightButton;  /* 右键状态，同上 */
 };
 
 struct EFI_GRAPHICS_OUTPUT_BLT_PIXEL {
@@ -276,7 +280,11 @@ typedef struct EFI_GRAPHICS_OUTPUT_PROTOCOL {
     EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *Mode;
 } EFI_GRAPHICS_OUTPUT_PROTOCOL;
 
-
+struct EFI_KEY_DATA {
+  UINT16 Key;
+  UINT16 KeyShiftState;
+  BOOLEAN KeyToggleState;
+};
 
 struct EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL {
     /* 重置输入设备 */

@@ -1,7 +1,7 @@
 #ifndef _FBC_HPP_
 #define _FBC_HPP_
 
-#include "../efi.h"
+#include <efi/efi.h>
 
 enum PixelFormat {
     kRGBR, // 带k表示内核会用到

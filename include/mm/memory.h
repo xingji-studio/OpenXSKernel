@@ -5,7 +5,7 @@
 #define MMIO_MEMORY 2
 #define UEFI_MEMORY 3
 #pragma pack(16)
-#include "../efi.h"
+#include <efi/efi.h>
 typedef struct __packed
 {
     UINTN MapSize;

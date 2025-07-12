@@ -59,6 +59,8 @@
   "files.associations": {
     "efi.h": "c",
     "boot.h": "c",
-    "define_code.hpp": "c"
+    "define_code.hpp": "c",
+    "memory.h": "c",
+    "fbc.h": "c"
   }
 }

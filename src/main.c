@@ -1,6 +1,9 @@
-#include "./include/cinclude.h"
-#include "./include/global/memory.h"
-#include "./settings.h"
+#include <efi/boot.h>
+#include <efi/efi.h>
+#include <efi/fbc.h>
+#include <elf.h>
+#include <mm/memory.h>
+#include "../settings.h"
 #define NULL 0
 struct EFI_SYSTEM_TABLE                *ST;  // 系统表
 struct EFI_BOOT_SERVICES               *BS;  // 启动信息

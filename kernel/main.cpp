@@ -1,5 +1,4 @@
 #include "build_settings.h"
-#include "build_config.h"
 #include <ahci/ahci.h>
 #include <cpu/regio.h>
 #include <device.h>
@@ -245,105 +244,6 @@ extern BOOT_CONFIG *EFI_BC;
 
 extern UserInfo *current_user;
 
-static char busybox_alias_applets[][16] = {
-    "[",       "[[",      "ash",      "awk",      "basename", "cat",      "chmod",   "chgrp",
-    "chown",   "clear",   "cmp",      "cp",       "cut",      "date",     "dd",      "df",
-    "dirname", "dmesg",   "du",       "echo",     "egrep",    "env",      "false",   "fgrep",
-    "find",    "free",    "grep",     "gunzip",   "gzip",     "head",     "hexdump", "hostname",
-    "id",      "ifconfig","install",  "ip",       "kill",     "killall",  "less",    "ln",
-    "ls",
-    "mkdir",   "more",    "mount",    "mv",       "nc",       "netstat",  "nslookup","od",
-    "pgrep",   "pidof",   "ping",     "pkill",    "printenv", "printf",   "ps",      "pwd",
-    "readlink","realpath","reset",    "rm",       "rmdir",    "route",    "sed",     "sh",
-    "sleep",   "sort",    "stat",     "stty",     "sync",     "tail",     "tar",     "test",
-    "top",     "touch",   "tr",       "true",     "tty",      "umount",   "uname",   "uniq",
-    "unzip",   "uptime",  "usleep",   "vi",       "wc",       "which",   "whoami",
-    "xargs",   "xxd",     "zcat",     NULL,
-};//暴力枚举这一块，好像只能这么做了
-  //Maybe we can try to load this applet when vfs inited.
-
-static int load_busybox_alias_applets()
-{
-    vfs_node_t vfp = vfs_open("/etc/busybox/alias/applets.csv");
-    if(!vfp) return -1;
-    char csv[1024] /* = malloc(vfs -> size) */;
-    char * csv_pointer = csv;
-    memset(csv, 0, 1024 /* vfs -> size / sizeof(char) */);
-    int idx = 0, i = 0;
-    
-    if(vfp -> size >= sizeof(csv)) {
-        idx = -2;
-        goto cleanup;
-    }
-    vfs_read(vfp, csv, 0, vfp -> size);
-
-    while(true) {
-        int j = 0;
-        while(true) {
-            switch(*csv_pointer)
-            {
-            case ',':
-            case '\r':
-            case '\n':
-                csv_pointer++;
-                busybox_alias_applets[i][j] = '\0';
-                goto finish_load;
-            case '\0':
-                busybox_alias_applets[i][j] = '\0';
-                goto finish;
-            default:
-                busybox_alias_applets[i][j] = *csv_pointer;
-                csv_pointer++;
-                j++;
-            }
-        }
-    finish_load:
-        i++;
-    }
-
-finish:
-    i++;
-    busybox_alias_applets[i][0] = '\0'; 
-cleanup:
-    vfs_close(vfp);
-    /* free(csv); */
-    return idx;
-}
-
-/*
-static void load_busybox_alias_applets()
-{
-    char setfile_path[32] = "/etc/busybox/alias/applets.dat";
-    vfs_node_t vfp = vfs_open(setfile_path);
-    if (!vfp) return;
-    char csv[1024];
-    char alias[9];
-    int applet_index = 0, alias_index = 0;
-    const int applet_count = sizeof(busybox_alias_applets) / sizeof(busybox_alias_applets[0]);
-    if (vfp->size >= sizeof(csv)) goto cleanup;
-    vfs_read(vfp, csv, 0, vfp->size);
-    memset(alias, 0, 9);
-    for (uint64_t i = 0; i < vfp->size && applet_index < applet_count - 1; i++)
-    {
-        if (csv[i] == ',')
-        {
-            strcpy(busybox_alias_applets[applet_index], alias);
-            applet_index++;
-            alias_index = 0;
-            memset(alias, 0, sizeof(alias));
-            continue;
-        }
-        if (alias_index < sizeof(alias) - 1) alias[alias_index++] = csv[i];
-    }
-    if (alias_index > 0 && applet_index < applet_count - 1) strcpy(busybox_alias_applets[applet_index], alias);
-
-cleanup:
-    vfs_close(vfp);
-}
-*/
-
-static const char *busybox_binary_path = "/apps/busybox";
-
 static void setup_xbps_vfs_aliases()
 {
     static const char *xbps_void_key_alias =
@@ -354,23 +254,6 @@ static void setup_xbps_vfs_aliases()
     if (vfs_register_alias(xbps_void_key_alias, xbps_void_key_target) == EOK)
     {
         write_serial_fmt("[xbps-debug] key alias %s -> %s\n", xbps_void_key_alias, xbps_void_key_target);
-    }
-}
-
-static void setup_busybox_vfs_aliases()
-{
-    const char *prefixes[] = {"/apps", "/bin", NULL};
-    for (int p = 0; prefixes[p] != NULL; p++)
-    {
-        for (int i = 0; busybox_alias_applets[i][0] != '\0'; i++)
-        {
-            char alias_path[128];
-            snprintf(alias_path, sizeof(alias_path), "%s/%s", prefixes[p], busybox_alias_applets[i]);
-            if (vfs_register_alias(alias_path, busybox_binary_path) == EOK)
-            {
-                write_serial_fmt("[busybox-debug] busybox alias %s -> %s\n", alias_path, busybox_binary_path);
-            }
-        }
     }
 }
 
@@ -631,9 +514,6 @@ extern "C" void KernelMain(const FrameBufferConfig &fbc, EFI_SYSTEM_TABLE &Syste
 
     bool installer_mode = false;
     mount_root();
-#if CONFIG_KERNEL_BUSYBOX_ALIASES
-    setup_busybox_vfs_aliases();
-#endif
     setup_xbps_vfs_aliases();
     if (!installer_root_is_tmpfs_ready()) tmpfs_setup();
     pipefs_setup();
@@ -679,8 +559,9 @@ extern "C" void KernelMain(const FrameBufferConfig &fbc, EFI_SYSTEM_TABLE &Syste
     } else {
         write_serial_string("AHCI: keeping conservative IO path on vmware/real hardware\n");
     }
-    user_session_use_login();
-    create_user_process_from_file((char *)"/apps/system/shell.elf", NULL, NULL);
+    user_session_use_root();
+    create_user_process_from_file((char *)"/apps/leopard/leopard-rc.elf", NULL, NULL);
+
 
     // delay_s_hp(60);
 

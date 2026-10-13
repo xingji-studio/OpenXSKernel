@@ -16,6 +16,7 @@
 #include <syscall/pxapi.h>
 #include <syscall/syscall.h>
 #include <task/poll.h>
+#include <power.h>
 
 // MSR寄存器地址定义
 #define MSR_EFER         0xC0000080 // EFER MSR寄存器
@@ -33,6 +34,9 @@ sys_(fchmodat, int dirfd, char *pathname, uint64_t mode, int flags);
 sys_(utimensat, int dirfd, char *pathname, const struct timespec *times, int flags);
 sys_(utimes, char *filename, const struct timeval *times);
 sys_(close_range, uint32_t first, uint32_t last, uint32_t flags);
+
+extern EFI_SYSTEM_TABLE *EFI_ST;
+extern BOOT_CONFIG *EFI_BC;
 
 static const char *debug_syscall_name(uint64_t nr)
 {
@@ -683,7 +687,16 @@ extern "C" uint64_t c_syscall_handler(struct X64_REGS *regs, uint64_t user_rsp)
     case XAPI_USER_LOGIN: regs->rax = do_xapi_UserLogin(regs->rdi, regs->rsi); break;
     case XAPI_USER_CREATE_FIRST: regs->rax = do_xapi_UserCreateFirst(regs->rdi, regs->rsi); break;
     case XAPI_GET_TIME_NANO: regs->rax = nanoTime(); break;
-    case XAPI_POWER_ACTION: regs->rax = (uint64_t)-ENOSYS; break;
+    case XAPI_POWER_ACTION:
+        if (EFI_ST != NULL && EFI_BC != NULL)
+        {
+            if (regs->rdi == XPOWER_SHUTDOWN)
+                power_shutdown(EFI_ST, EFI_BC);       /* [[noreturn]] */
+            else if (regs->rdi == XPOWER_REBOOT)
+                power_reboot(EFI_ST, EFI_BC);         /* [[noreturn]] */
+        }
+        regs->rax = (uint64_t)-1;
+        break;
     case XAPI_NOTIFY_SEND: case XAPI_NOTIFY_SET_PROCOR: regs->rax = (uint64_t)-ENOSYS; break;
 
     /* Private XJ380 extension range; this is not a stable public ABI. */

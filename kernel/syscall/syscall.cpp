@@ -165,6 +165,7 @@ static const char *debug_syscall_name(uint64_t nr)
 
 static bool debug_trace_xbps_task()
 {
+    return false; /* 调试日志已关闭（每个 syscall 写串口极慢） */
     tcb_t task = get_current_task();
     if (task == NULL || task->parent_group == NULL || !task->parent_group->linux_abi) return false;
     return strstr(task->name, "xbps") != NULL || strstr(task->parent_group->name, "xbps") != NULL;
@@ -612,8 +613,14 @@ extern "C" uint64_t c_syscall_handler(struct X64_REGS *regs, uint64_t user_rsp)
         //     regs->rax = get_current_task()->parent_group->pid;
         //     break;
     case SYS_SET_TID_ADDRESS: regs->rax = (uint64_t)sys_set_tid_address((int *)regs->rdi, 0, 0, 0, 0, 0, regs); break;
-    case SYS_SET_ROBUST_LIST: regs->rax = (uint64_t)-ENOSYS; break;
-    case SYS_RSEQ: regs->rax = (uint64_t)-ENOSYS; break;
+    case SYS_MOUNT:
+        regs->rax = (uint64_t)sys_mount((char *)regs->rdi, (char *)regs->rsi, (char *)regs->rdx, regs->r10, (void *)regs->r8, 0, regs);
+        break;
+    case SYS_UMOUNT2:
+        regs->rax = (uint64_t)sys_umount2(regs->rdi, regs->rsi, 0, 0, 0, 0, regs);
+        break;
+    case SYS_SET_ROBUST_LIST: regs->rax = 0; break;             /* 无 robust futex：no-op */
+    case SYS_RSEQ: regs->rax = (uint64_t)-ENOSYS; break;        /* musl 优雅降级 */
 
 
 
@@ -679,9 +686,9 @@ extern "C" uint64_t c_syscall_handler(struct X64_REGS *regs, uint64_t user_rsp)
     case XAPI_RUN_ARGS: regs->rax = do_xapi_RunArgs((char *)regs->rdi, (char **)regs->rsi); break;
     case XAPI_MAP_MEMORY: regs->rax = do_xapi_MapMemory(regs->rdi, regs->rsi, regs->rdx); break;
     case XAPI_REMOVEDIR: sys_rmdir(regs->rdi, 0, 0, 0, 0, 0, regs); break;
-    case XAPI_FLUSH_TIME: regs->rax = (uint64_t)-ENOSYS; break;
-    case XAPI_GET_TASK_LIST: regs->rax = (uint64_t)-ENOSYS; break;
-    case XAPI_KILL_PROCESS: regs->rax = (uint64_t)-ENOSYS; break;
+    case XAPI_FLUSH_TIME: do_xapi_FlushTime(); regs->rax = 0; break;
+    case XAPI_GET_TASK_LIST: regs->rax = do_xapi_GetTaskList(regs->rdi, regs->rsi); break;
+    case XAPI_KILL_PROCESS: regs->rax = do_xapi_KillProcess(regs->rdi); break;
     case XAPI_USER_OOBE_REQUIRED: regs->rax = do_xapi_UserOobeRequired(); break;
     case XAPI_USER_LIST: regs->rax = do_xapi_UserList(regs->rdi, regs->rsi); break;
     case XAPI_USER_LOGIN: regs->rax = do_xapi_UserLogin(regs->rdi, regs->rsi); break;

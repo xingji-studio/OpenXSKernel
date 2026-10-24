@@ -364,6 +364,7 @@ static int64_t write_from_user_buffer(fd_file_handle *handle, const uint8_t *buf
 
 static bool trace_xbps_task()
 {
+    return false; /* 调试日志已关闭 */
     tcb_t task = get_current_task();
     if (task == NULL || task->parent_group == NULL || !task->parent_group->linux_abi) return false;
     return strstr(task->name, "xbps") != NULL || strstr(task->parent_group->name, "xbps") != NULL;
@@ -4600,7 +4601,6 @@ sys_(readlinkat, int dirfd, char *path, char *buf, size_t size)
 
 sys_(prlimit64, int pid, uint64_t resource, struct rlimit *new_limit, struct rlimit *old_limit)
 {
-    (void)resource;
     if (pid != 0)
     {
         pcb_t process = found_pcb(pid);
@@ -4618,8 +4618,9 @@ sys_(prlimit64, int pid, uint64_t resource, struct rlimit *new_limit, struct rli
     if (old_limit != NULL)
     {
         struct rlimit current;
-        current.rlim_cur = 1024ULL * 1024ULL * 1024ULL;
-        current.rlim_max = 1024ULL * 1024ULL * 1024ULL;
+        /* RLIMIT_NOFILE(7) 返回 1024，避免 musl closefrom 用 1GB 上界死循环 close */
+        current.rlim_cur = (resource == 7) ? 1024 : (1024ULL * 1024ULL * 1024ULL);
+        current.rlim_max = current.rlim_cur;
         if (!copy_to_user_pagedir(current_user_pagedir(), old_limit, &current, sizeof(current)))
             return SYSCALL_FAULT_(EFAULT);
     }

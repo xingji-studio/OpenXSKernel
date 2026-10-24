@@ -333,6 +333,7 @@ struct fb_var_screeninfo
 #define IOGPTYPE 0x545E // 获取分区类型
 #define IOGPINFO 0x545F // 获取分区信息
 #define IOBLKSYNC 0x5461 // 同步块设备写缓存
+#define IOPARTSCAN 0x5462 // 触发分区重扫（无参数）
 
 struct ioctl_gpt_partition {
     uint16_t name[36];                  // 分区名

@@ -12,6 +12,7 @@
 #define BOOT_FLAG_LAST_KNOWN_GOOD  (1ULL << 5)
 #define BOOT_FLAG_SHOW_PROGRESS    (1ULL << 6)
 #define BOOT_FLAG_INSTALLER        (1ULL << 7)
+#define BOOT_FLAG_LIVE_ROOT        (1ULL << 8) /* live 介质：root 来自 RAM（引导器载入 pak） */
 
 typedef struct
 {

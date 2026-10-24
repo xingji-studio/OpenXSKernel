@@ -15,11 +15,11 @@ extern int tmpfs_setup();
 
 bool installer_boot_active(const BOOT_CONFIG &boot_config)
 {
-    return (boot_config.boot_flags & BOOT_FLAG_INSTALLER) != 0 &&
+    /* live root：引导器把整个 live 介质载入 RAM（installer_root_pak），
+       内核以 tmpfs 为根解包。不再要求 system_payload（装系统走 xbps）。 */
+    return (boot_config.boot_flags & BOOT_FLAG_LIVE_ROOT) != 0 &&
            boot_config.installer_root_pak != 0 &&
-           boot_config.installer_root_pak_size >= sizeof(xj380_pak_header) &&
-           boot_config.system_payload_pak != 0 &&
-           boot_config.system_payload_pak_size >= sizeof(xj380_pak_header);
+           boot_config.installer_root_pak_size >= sizeof(xj380_pak_header);
 }
 
 static const uint8_t *installer_phys_blob(uint64_t phys, uint64_t size)

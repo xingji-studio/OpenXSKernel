@@ -6,6 +6,8 @@
 #include "fs/vfs/devfs.h"
 #include "device.h"
 #include "errno.h"
+#include "fs/partition.h"
+#include <ioctl.h>
 // #include "kprint.h"
 #include "krlibc.h"
 // #include "sprintf.h"
@@ -221,6 +223,11 @@ size_t devfs_write(void *file, const void *addr, size_t offset, size_t size) {
 static errno_t devfs_ioctl(void *file, size_t req, void *arg) {
     device_handle_t handle =  (device_handle_t)file;
     if (handle->device->flag == 0) return VFS_STATUS_FAILED;
+    if (req == IOPARTSCAN) {
+        if (handle->device->type != DEVICE_BLOCK) return -ENOTTY;
+        partition_rescan_device(handle->device->vdiskid, false);
+        return EOK;
+    }
     return handle->device->ioctl(handle->device, req, arg);
 }
 

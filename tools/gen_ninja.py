@@ -95,9 +95,24 @@ def main():
     L += ["build out/font/hankaku.o: objcopy_bin font/hankaku.bin",
           "  bin_input = ./font/hankaku.bin", ""]
     inputs = " ".join(esc(o) for o in objs) + " out/font/hankaku.o liballoc-x86_64.a"
-    L += [f"build out/kernel.krl: kernel_link {inputs} | linker.ld", "",
-          "build all: phony out/kernel.krl", "default all", "",
-          "rule clean", "  command = rm -rf out kernel/build_config.h", "build clean: clean"]
+    L += [f"build out/kernel.krl: kernel_link {inputs} | linker.ld", ""]
+
+    # ---- xbps 打包（pack）----
+    pkg = {"name": "OpenXSKernel", "ver": "2.1.0_1", "arch": "x86_64",
+           "desc": "Leopard kernel", "install": "system/kernel.krl"}
+    pkg_args = f"-A {pkg['arch']} -n {pkg['name']}-{pkg['ver']} -s '{pkg['desc']}'"
+    xbps_out = f"out/{pkg['name']}-{pkg['ver']}.{pkg['arch']}.xbps"
+    L += [
+        "rule package",
+        f"  command = rm -rf .pkg && mkdir -p .pkg/$$(dirname {pkg['install']}) && "
+        f"cp out/kernel.krl .pkg/{pkg['install']} && cd out && xbps-create {pkg_args} ../.pkg",
+        "",
+        f"build {xbps_out}: package out/kernel.krl",
+        "build build: phony out/kernel.krl",
+        f"build pack: phony {xbps_out}",
+        "default build", "",
+        "rule clean", "  command = rm -rf out kernel/build_config.h .pkg", "build clean: clean",
+    ]
 
     (ROOT / "build.ninja").write_text("\n".join(L) + "\n", encoding="utf-8")
     print("已生成 build.ninja（仅内核）。构建：ninja")

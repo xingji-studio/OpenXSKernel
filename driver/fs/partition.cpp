@@ -108,9 +108,41 @@ static void partition_scan_single_device(size_t vdisk_id, bool auto_mount)
     }
 }
 
+static void partition_clear_device(size_t vdisk_id)
+{
+    /* 删除该磁盘已注册的分区设备节点 */
+    for (size_t i = 0; i < partition_num; i++) {
+        if (!partitions[i].is_used || partitions[i].vdisk_id != vdisk_id) continue;
+        for (int id = 0; id < MAX_PARTITIONS_NUM; id++) {
+            if (device_lists[id] == &partitions[i]) {
+                delete_device(id);
+                device_lists[id] = NULL;
+                break;
+            }
+        }
+        memset(&partitions[i], 0, sizeof(partitions[i]));
+    }
+    /* 压实 partitions[]（去掉空洞），并同步 device_lists 指针 */
+    size_t w = 0;
+    for (size_t i = 0; i < partition_num; i++) {
+        if (partitions[i].is_used) {
+            if (w != i) {
+                for (int id = 0; id < MAX_PARTITIONS_NUM; id++) {
+                    if (device_lists[id] == &partitions[i]) device_lists[id] = &partitions[w];
+                }
+                partitions[w] = partitions[i];
+                memset(&partitions[i], 0, sizeof(partitions[i]));
+            }
+            w++;
+        }
+    }
+    partition_num = w;
+}
+
 void partition_rescan_device(size_t vdisk_id, bool auto_mount)
 {
     if (vdisk_id >= 256) return;
+    partition_clear_device(vdisk_id);
     partition_scan_single_device(vdisk_id, auto_mount);
 }
 

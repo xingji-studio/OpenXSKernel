@@ -244,19 +244,6 @@ extern BOOT_CONFIG *EFI_BC;
 
 extern UserInfo *current_user;
 
-static void setup_xbps_vfs_aliases()
-{
-    static const char *xbps_void_key_alias =
-        "/var/db/xbps/keys/60:ae:0c:d6:f0:95:17:80:bc:93:46:7a:89:af:a3:2d.plist";
-    static const char *xbps_void_key_target =
-        "/var/db/xbps/keys/60_ae_0c_d6_f0_95_17_80_bc_93_46_7a_89_af_a3_2d.plist";
-
-    if (vfs_register_alias(xbps_void_key_alias, xbps_void_key_target) == EOK)
-    {
-        write_serial_fmt("[xbps-debug] key alias %s -> %s\n", xbps_void_key_alias, xbps_void_key_target);
-    }
-}
-
 void init_cpu()
 {
     __asm__ __volatile__("movq %%cr0, %%rax\n\t"
@@ -512,9 +499,11 @@ extern "C" void KernelMain(const FrameBufferConfig &fbc, EFI_SYSTEM_TABLE &Syste
     xhci_start_workers();
 #endif
 
-    bool installer_mode = false;
-    mount_root();
-    setup_xbps_vfs_aliases();
+    bool installer_mode = installer_boot_active(BootConfig);
+    if (installer_mode)
+        installer_prepare_root(BootConfig);
+    else
+        mount_root();
     if (!installer_root_is_tmpfs_ready()) tmpfs_setup();
     pipefs_setup();
     pty_init();
@@ -560,7 +549,7 @@ extern "C" void KernelMain(const FrameBufferConfig &fbc, EFI_SYSTEM_TABLE &Syste
         write_serial_string("AHCI: keeping conservative IO path on vmware/real hardware\n");
     }
     user_session_use_root();
-    create_user_process_from_file((char *)"/apps/leopard/leopard-rc.elf", NULL, NULL);
+    create_user_process_from_file((char *)"/system/leopard/leopard-rc.elf", NULL, NULL);
 
 
     // delay_s_hp(60);

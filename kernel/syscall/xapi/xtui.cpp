@@ -37,6 +37,53 @@ uint64_t do_xapi_GetTime()
     return mktime(&t);
 }
 
+uint64_t do_xapi_KillProcess(uint64_t pid)
+{
+    pcb_t proc = found_pcb((int)pid);
+    if (proc == NULL) return (uint64_t)-ESRCH;
+    kill_proc(proc, 0, false);
+    return 0;
+}
+
+uint64_t do_xapi_GetTaskList(uint64_t buffer, uint64_t max_count)
+{
+    if (buffer == 0 || max_count == 0) return 0;
+    page_directory_t *pagedir = xapi_current_pagedir();
+    if (pagedir == NULL) return 0;
+
+    XapiTaskInfo *infos = (XapiTaskInfo *)calloc((size_t)max_count, sizeof(XapiTaskInfo));
+    if (infos == NULL) return 0;
+
+    size_t count = 0;
+    if (pcb_group_queue != NULL) {
+        spin_lock(&pcb_group_queue->lock);
+        queue_foreach(pcb_group_queue, node)
+        {
+            pcb_t proc = (pcb_t)node->data;
+            if (proc == NULL || count >= (size_t)max_count) continue;
+            XapiTaskInfo *info = &infos[count];
+            memset(info, 0, sizeof(*info));
+            info->pid            = (uint64_t)proc->pid;
+            info->ppid           = proc->ppid;
+            info->task_level     = (uint64_t)proc->task_level;
+            info->process_status = (uint32_t)proc->status;
+            strncpy(info->process_name, proc->name, sizeof(info->process_name) - 1);
+            count++;
+        }
+        spin_unlock(&pcb_group_queue->lock);
+    }
+
+    if (count > 0)
+        copy_to_user_pagedir(pagedir, (void *)buffer, infos, count * sizeof(XapiTaskInfo));
+    free(infos);
+    return (uint64_t)count;
+}
+
+void do_xapi_FlushTime()
+{
+    /* 无 RTC 写回支持：no-op */
+}
+
 // Helpers prefixed with p_xapi_ are private to this translation unit.
 void p_xapi_output_kernel(const char *str)
 {

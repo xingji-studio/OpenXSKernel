@@ -60,3 +60,6 @@ venv/
 # Local audit notes
 /docs/LICENSE_AUDIT_2026-08-08.md
 !/docs/SCHEDULER_AND_LOCKING.md
+
+# xbps package staging
+.pkg/

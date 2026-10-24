@@ -387,7 +387,7 @@ uint64_t do_xapi_ReadFile(struct X64_REGS *regs)
         return 0;
     }
 
-    ssize_t ret = xfile_read_to_user(node, (void *)regs->rsi, regs->r9, regs->rdx);
+    ssize_t ret = xfile_read_to_user(node, (void *)regs->rsi, regs->r10, regs->rdx);
     vfs_close(node);
     free(fpath);
     return ret;
@@ -429,7 +429,7 @@ uint64_t do_xapi_WriteFile(struct X64_REGS *regs)
         return 0;
     }
 
-    ssize_t ret = xfile_write_from_user(node, (void *)regs->rsi, regs->r9, regs->rdx);
+    ssize_t ret = xfile_write_from_user(node, (void *)regs->rsi, regs->r10, regs->rdx);
     vfs_close(node);
     free(fpath);
     return ret;

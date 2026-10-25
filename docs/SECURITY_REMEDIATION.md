@@ -1,36 +1,28 @@
-# Security remediation status
+# 安全加固现状（纯内核）
 
-This document records the remediation performed against the supplied host-side PoC bundle. A checked item means the vulnerable first-party path was changed and compiled; it does not replace runtime fuzzing or release qualification.
+> 本文档曾记录 OpenXJ380 全系统（含 GUI、用户注册表 usereg.dat、可加载模块签名、TLS/chat、
+> busybox）的安全加固。纯内核抽取后，用户态相关项已移到 LeopardOS / 组件仓库；本文件只保留
+> **内核层仍适用**的加固项。
 
-## Fixed or directly mitigated
+## 内核层已修复 / 已加固
 
-- Dynamic linker: validates ELF/program-header/file ranges and module address-space bounds before mapping; validates dynamic termination, symbol/hash/string ranges, relocation tables, symbol indices and relocation write targets; bounds module names.
-- GPT/MBR parser: caps global and per-disk partition counts, checks multiplication/LBA arithmetic, disk bounds and allocation results, and removes the duplicate unsafe GPT path.
-- SXAH terminal calls: copy through the current process page table and never call `strlen`, `strncpy` or `memcpy` directly on a user pointer.
-- Runfile dispatch: rejects oversized registries, uses a zeroed heap object, checks short reads and string termination, closes the VFS node on every path.
-- User ELF loader: rejects truncated headers, overflowing program-header tables, kernel/null-page segment addresses, oversized mappings and entry points outside executable load segments.
-- VFS symlinks and aliases: limits recursive resolution to 40 links.
-- Full-path construction: dynamically sizes the result instead of writing into a fixed 256-byte buffer.
-- Authentication flow: boots the shell as a Visitor login session, requires setup/login before the command loop, rate-limits failed logins, suppresses passwords from user-list results, and refuses to overwrite a malformed existing registry during OOBE.
-- Kernel random API: replaces per-call xorshift streams with a locked persistent ChaCha20 generator, hardware `RDSEED`/`RDRAND` input when available, periodic reseeding and counter-wrap handling. Both `getrandom` and `/dev/urandom` use the shared generator.
-- Image wrappers: reject zero/negative dimensions and checked-size overflow before allocation or resize.
-- CLI build cleanup: retains keyboard modifier/input behavior without references to removed GUI-only shortcut routing.
+- 用户 ELF 装载：校验 ELF/program-header/file 范围与地址空间边界；拒绝截断头、溢出段表、
+  内核/null 页段地址、超限映射、入口点落在可执行段之外。
+- GPT/MBR 解析：限制全局与单盘分区数，检查乘法/LBA 算术、磁盘边界与分配结果。
+- 系统调用边界：用户指针先经当前进程页表复制，绝不直接对用户指针调用 `strlen/strncpy/memcpy`。
+- VFS 符号链接与别名：递归解析限制 40 层。
+- 全路径构造：动态分配结果，不写死 256 字节缓冲。
+- 内核随机：`getrandom` / `/dev/urandom` 共享带锁持久 ChaCha20 发生器，优先 `RDSEED`/`RDRAND`。
 
-## Still open
+## 已移出内核 / 不适用
 
-- `usereg.dat` still stores passwords in plaintext and has no authenticated on-disk format. It needs a versioned migration to salted password hashes plus an integrity/ownership policy; existing credentials must be migrated without silently resetting accounts.
-- Module loading still has no signature/trust policy. Parser hardening reduces memory-corruption exposure, but untrusted kernel modules remain equivalent to arbitrary kernel code.
-- The ChaCha20 fallback on CPUs without hardware entropy still mixes timing and address state; a boot entropy readiness model and additional device/interrupt entropy are required before claiming cryptographic guarantees on those machines.
-- Userland TLS/chat entropy and peer authentication from PoC item 10 are not in the current CLI build graph and remain to be redesigned before enabling those applications.
-- Vendored BusyBox/libvterm and other dependency findings require version inventory, upgrade selection and compatibility testing. No dependency CVE is marked fixed by this patch.
-- The in-tree font validator remains the boundary for the mitigated stb_truetype issue. Direct callers must not bypass it.
-- ELF and image changes need sustained ASAN/UBSAN/libFuzzer coverage in CI; the supplied PoCs are mirrors of the old logic, not end-to-end kernel tests.
+- `usereg.dat` 凭据存储与 OOBE 认证流 → 用户态（LeopardOS 组件）。
+- 可加载模块签名/信任策略 → 纯内核已无 kmod（无 `kmod/` 目录）。
+- TLS/chat、busybox/libvterm → 用户态，不在本仓库。
+- GUI（窗口/绘制/按钮/滚动条/输入框）→ 已移除，对应 XAPI syscall 保留号但 stub 为 `-ENOSYS`。
 
-## Verification performed
+## 验证
 
-- `python -m unittest discover -s tests -p 'test_*.py'`: 7/7 passed.
-- All changed kernel objects compiled with the generated freestanding Clang rules in an isolated Ubuntu container.
-- `user/cli_shell.cpp` compiled with the project userland flags (Clang substituted for unavailable `g++`).
-- `graphics/image/image.cpp` compiled with the kernel freestanding flags; only existing macro-redefinition warnings were emitted.
-- Supplied ChaCha20 remediation harness passed the RFC 8439 block vector, consecutive-output, non-degenerate 4 KiB, 1 MiB reseed and non-repeating-block tests.
-- The full kernel reached the final linker step. Linking remains blocked by pre-existing missing serial/formatting implementations in the reduced CLI graph; no newly added security symbol was reported unresolved.
+- `python3 tools/gen_ninja.py && ninja` 内核构建通过。
+- 宿主机侧单元测试 `python3 -m unittest discover -s tests -v`。
+- 运行时验证配合 OpenXSBoot + LeopardOS 在 QEMU 启动，检查串口日志。

@@ -18,6 +18,7 @@ typedef struct file {
 } *file_t;
 
 vfs_node_t drive_number_mapping[10] = {NULL};
+static char *fatfs_mount_points[10] = {NULL};
 
 static int alloc_number() {
     for (int i = 0; i < 10; i++)
@@ -514,6 +515,8 @@ errno_t fatfs_mount(const char *src, vfs_node_t node) {
     DIR *h   = (DIR*)malloc(sizeof(DIR));
     f_opendir(h, path);
     f->handle   = h;
+    if (fatfs_mount_points[drive] != NULL) { free(fatfs_mount_points[drive]); }
+    fatfs_mount_points[drive] = vfs_get_fullpath(node);
     node->fsid  = fatfs_id;
     node->inode = 1;
     node->root  = node;
@@ -566,6 +569,7 @@ void fatfs_unmount(void *root) {
     file_t f                     = (file_t)root;
     int    number                = f->path[0] - '0';
     drive_number_mapping[number] = NULL;
+    if (fatfs_mount_points[number] != NULL) { free(fatfs_mount_points[number]); fatfs_mount_points[number] = NULL; }
     f_closedir((DIR*)f->handle);
     f_unmount(f->path);
     free(f->path);
@@ -695,13 +699,21 @@ int fatfs_rename(file_t file, const char *nw) {
     const char *target_path = nw;
     char       *fat_target  = NULL;
     if (nw[0] == '/' && file->path[0] != '\0' && file->path[1] == ':') {
-        fat_target = (char *)malloc(strlen(nw) + 3);
+        int         drive = file->path[0] - '0';
+        const char *mp    = (drive >= 0 && drive < 10) ? fatfs_mount_points[drive] : NULL;
+        const char *rel   = nw;
+        if (mp != NULL && mp[0] == '/' && strlen(mp) > 1 &&
+            strncmp(nw, mp, strlen(mp)) == 0) {
+            rel = nw + strlen(mp);
+            if (*rel == '\0') rel = "/";
+        }
+        fat_target = (char *)malloc(strlen(rel) + 3);
         if (fat_target == NULL) {
             return VFS_STATUS_FAILED;
         }
         fat_target[0] = file->path[0];
         fat_target[1] = ':';
-        strcpy(fat_target + 2, nw);
+        strcpy(fat_target + 2, rel);
         target_path = fat_target;
     }
 

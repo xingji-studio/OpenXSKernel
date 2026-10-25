@@ -3645,6 +3645,24 @@ sys_(getdents64, int fd, void *dents, size_t size)
 sys_(newfstatat, int dirfd, char *pathname, struct stat *buf, uint64_t flags)
 {
     if (buf == NULL) return SYSCALL_FAULT_(EINVAL);
+
+    /* AT_EMPTY_PATH + 空路径：直接 stat dirfd 指向的节点（等同 fstat(dirfd)） */
+    if (flags & AT_EMPTY_PATH) {
+        char *kpath = NULL;
+        int kret = copy_string_from_user(&kpath, pathname, USER_PATH_MAX);
+        if (kret < 0) return SYSCALL_FAULT_((int)-kret);
+        int empty = (kpath[0] == '\0');
+        free(kpath);
+        if (empty) {
+            fd_file_handle *handle = (fd_file_handle *)queue_get(get_current_task()->parent_group->file_open, dirfd);
+            if (handle == NULL) return SYSCALL_FAULT_(EBADF);
+            struct stat kstat;
+            uint64_t sret = fill_stat_from_node(handle->node, &kstat);
+            if ((int64_t)sret < 0) return sret;
+            return copy_stat_to_user(buf, &kstat);
+        }
+    }
+
     char *resolved = NULL;
     int path_ret = resolve_user_path_at(dirfd, pathname, &resolved);
     if (path_ret < 0) return SYSCALL_FAULT_((int)-path_ret);

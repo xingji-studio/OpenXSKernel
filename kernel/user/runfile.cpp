@@ -112,27 +112,27 @@ bool init_user_runfile(const char *username)
 
     strcpy(file_format->items[0].exname,   "txt");
     strcpy(file_format->items[0].describe, "文本文件");
-    strcpy(file_format->items[0].runpath,  "/apps/builtin/texter.elf");
+    strcpy(file_format->items[0].runpath,  "");
 
     strcpy(file_format->items[1].exname,   "inf");
     strcpy(file_format->items[1].describe, "配置文件");
-    strcpy(file_format->items[1].runpath,  "/apps/builtin/texter.elf");
+    strcpy(file_format->items[1].runpath,  "");
 
     strcpy(file_format->items[2].exname,   "png");
     strcpy(file_format->items[2].describe, "PNG 图片文件");
-    strcpy(file_format->items[2].runpath,  "/apps/builtin/picturer.elf");
+    strcpy(file_format->items[2].runpath,  "");
 
     strcpy(file_format->items[3].exname,   "jpg");
     strcpy(file_format->items[3].describe, "JPEG 图片文件");
-    strcpy(file_format->items[3].runpath,  "/apps/builtin/picturer.elf");
+    strcpy(file_format->items[3].runpath,  "");
 
     strcpy(file_format->items[4].exname,   "bmp");
     strcpy(file_format->items[4].describe, "位图文件");
-    strcpy(file_format->items[4].runpath,  "/apps/builtin/picturer.elf");
+    strcpy(file_format->items[4].runpath,  "");
 
     strcpy(file_format->items[5].exname,   "xtb");
     strcpy(file_format->items[5].describe, "XJ380 块状文本标记文本文件");
-    strcpy(file_format->items[5].runpath,  "/apps/builtin/texter.elf");
+    strcpy(file_format->items[5].runpath,  "");
 
     return write_file_if_empty(runfile_setfile_path, settings_file_buffer, sizeof(settings_file_buffer));
 }

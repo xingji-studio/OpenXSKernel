@@ -138,24 +138,6 @@ bool installer_root_is_tmpfs_ready()
     return g_installer_root_is_tmpfs_ready;
 }
 
-void installer_launch_app()
-{
-    if (current_user == NULL)
-    {
-        current_user = (UserInfo *)malloc(sizeof(UserInfo));
-        if (current_user != NULL)
-        {
-            memset(current_user, 0, sizeof(UserInfo));
-            strcpy(current_user->name, "Installer");
-            current_user->user_type = XUT_Root;
-            current_user->envp = root_user.envp;
-            current_user->envc = root_user.envc;
-        }
-    }
-    int pid = create_user_process_from_file((char *)"/apps/system/shell.elf", NULL, NULL);
-    write_serial_fmt("installer: launch /apps/system/shell.elf pid=%d\n", pid);
-}
-
 const BOOT_CONFIG *installer_current_boot_config()
 {
     return g_installer_boot_config;

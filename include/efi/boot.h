@@ -14,6 +14,8 @@
 #define BOOT_FLAG_INSTALLER        (1ULL << 7)
 #define BOOT_FLAG_LIVE_ROOT        (1ULL << 8) /* live 介质：root 来自 RAM（引导器载入 pak） */
 
+#define BOOT_CONFIG_INIT_MAX 256  /* PID1 init 路径缓冲区长度 */
+
 typedef struct
 {
     MEMORY_MAP MemoryMap;
@@ -35,6 +37,8 @@ typedef struct
     uint64_t installer_root_pak_size;
     uint64_t system_payload_pak;
     uint64_t system_payload_pak_size;
+
+    char init[BOOT_CONFIG_INIT_MAX]; /* PID1 路径：引导器从 boot.conf 读入 */
 } BOOT_CONFIG;
 
 #endif

@@ -1,18 +1,23 @@
-#ifndef _FBC_HPP_
-#define _FBC_HPP_
+// Portions derived from MikanOS (https://github.com/uchan-nos/mikanos), Apache-2.0.
 
-#include <efi/efi.h>
+// XJ380图像头文件
+#ifndef FBC_HPP_
+#define FBC_HPP_
 
-enum PixelFormat {
+#include <stdint.h>
+
+enum PixelFormat
+{
     kRGBR, // 带k表示内核会用到
     kBGRR
 }; // only支持这两种
 
-struct FrameBufferConfig {
-    UINT8 *frame_buffer;
-    UINT32 pixels_per_scan_line;
-    UINT32 horizontal_resolution;
-    UINT32 vertical_resolution;
+struct FrameBufferConfig
+{
+    uint8_t         *frame_buffer;
+    uint32_t         pixels_per_scan_line;
+    uint32_t         horizontal_resolution;
+    uint32_t         vertical_resolution;
     enum PixelFormat pixel_format;
 };
 

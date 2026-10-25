@@ -1,5 +1,10 @@
 OUTPUT_FORMAT("elf64-x86-64")  
 ENTRY(KernelMain)  
+
+PHDRS
+{
+    ksymtab PT_LOAD FLAGS(4);
+}
   
 SECTIONS  
 {  
@@ -40,4 +45,19 @@ SECTIONS
         *(COMMON)  
         __bss_end__ = .;  
     }  
+
+    . = ALIGN(4K);
+
+    .ksymtab : {
+        __ksymtab_start = .;
+        KEEP(*(.ksymtab))
+        __ksymtab_end = .;
+    } : ksymtab
+    
+    /DISCARD/ : {
+        *(.interp)
+        *(.note .note.*)
+        *(.gnu .gnu.*)
+        *(.eh_frame*)
+    }
 }

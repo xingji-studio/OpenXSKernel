@@ -57,22 +57,26 @@ int check_input_waiting_status()
     return status;
 }
 
-int read_terminal_app_output_buffer(char *str)
+int read_terminal_app_output_buffer(char *str, size_t capacity)
 {
     tcb_t current = get_current_task();
-    if (str == NULL || current == NULL || current->parent_group == NULL || current->parent_group->xtttp_stc == NULL) {
+    if (str == NULL || current == NULL || current->parent_group == NULL || current->parent_group->xtttp_stc == NULL)
         return -EFAULT;
-    }
+    if (capacity == 0)
+        return -EINVAL;
 
     char output[1024];
     memset(output, 0, sizeof(output));
     if (current->parent_group->xtttp_stc->output_lock)
-    {
         return copy_to_user_pagedir(current->parent_group->pagedir, str, output, 1) ? 0 : -EFAULT;
-    }
 
     strncpy(output, current->parent_group->xtttp_stc->output, sizeof(output) - 1);
-    return copy_to_user_pagedir(current->parent_group->pagedir, str, output, sizeof(output)) ? 0 : -EFAULT;
+    output[sizeof(output) - 1] = '\0';
+    size_t len = strnlen(output, sizeof(output) - 1);
+    if (len >= capacity)
+        len = capacity - 1;
+    output[len] = '\0';
+    return copy_to_user_pagedir(current->parent_group->pagedir, str, output, len + 1) ? 0 : -EFAULT;
 }
 
 int write_terminal_app_output_buffer(const char *str)

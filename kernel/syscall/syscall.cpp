@@ -713,7 +713,7 @@ extern "C" uint64_t c_syscall_handler(struct X64_REGS *regs, uint64_t user_rsp)
         // message_end();
         break;
     case SXAH_MARK_IS_TERMINAL: mark_process_is_terminal(); break;
-    case SXAH_READ_OUTPUT_BUFFER: regs->rax = read_terminal_app_output_buffer((char *)regs->rdi); break;
+    case SXAH_READ_OUTPUT_BUFFER: regs->rax = read_terminal_app_output_buffer((char *)regs->rdi, (size_t)regs->rsi); break;
     case SXAH_WRITE_INPUT_BUFFER: regs->rax = write_terminal_app_output_buffer((const char *)regs->rdi); break;
     case SXAH_CHECK_INPUT_BUFFER: regs->rax = check_input_waiting_status(); break;
     case SXAH_UNLOCK_OUTPUT_LOCK: terminal_finish_app_output(); break;

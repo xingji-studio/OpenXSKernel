@@ -1,6 +1,8 @@
+#include <cpu/lock.h>
 #include <cpu/msr.h>
 #include <errno.h>
 #include <fs/vfs/vfs.h>
+#include <ime_utf8.h>
 #include <mm/alloc/alloc.h>
 #include <pctable/gdt.h>
 #include <pctable/idt.h>
@@ -10,6 +12,8 @@
 #include <task/pcb.h>
 #include <mm/frame.h>
 #include <pipe.h>
+
+static spin_t getch_lock = SPIN_INIT;
 
 static bool message_pipe_write_handle_valid(tcb_t task, fd_file_handle **out_handle)
 {
@@ -152,17 +156,26 @@ uint64_t message_ask(uint64_t msg_type_p, uint64_t hdatap, uint64_t ldatap, uint
     return 0;
 }
 
-void do_message(uint64_t msg_type, uint64_t hData, uint64_t lData, MsgPrcor WinMpf, tcb_t ftask)
+void do_message_unfiltered(uint64_t msg_type, uint64_t hData, uint64_t lData, MsgPrcor WinMpf, tcb_t ftask)
 {
     if (ftask == NULL || ftask->parent_group == NULL || ftask->parent_group->xtttp_stc == NULL) return;
 
     tcb_t current = ftask;
 
-    // 看看需不需要getch?
-    if (current->parent_group->xtttp_stc->wait_for_getch && msg_type == MSG_CHAR)
+    // MSG_CHAR 携带一个打包的 UTF-8 字符（最多 4 字节），喂进终端环形缓冲
+    if (msg_type == MSG_CHAR)
     {
-        current->parent_group->xtttp_stc->char_for_getch = lData;
-        current->parent_group->xtttp_stc->wait_for_getch = false;
+        xtttp_dtt *terminal = current->parent_group->xtttp_stc;
+        char bytes[8]; memcpy(bytes, &lData, sizeof(bytes));
+        size_t count = ime_utf8_scalar_bytes(bytes, 4);
+        spin_lock(&getch_lock);
+        if ((terminal->wait_for_getch || terminal->getch_count) && count && terminal->getch_count + count <= 128)
+        {
+            for (size_t i = 0; i < count; ++i)
+                terminal->getch_bytes[(terminal->getch_head + terminal->getch_count++) % 128] = bytes[i];
+            terminal->wait_for_getch = false;
+        }
+        spin_unlock(&getch_lock);
     }
 
     // 检查是否有注册的信号处理函数
@@ -180,6 +193,27 @@ void do_message(uint64_t msg_type, uint64_t hData, uint64_t lData, MsgPrcor WinM
         vfs_write(handle->node, &mif, 0, sizeof(mif));
     }
     // 空的就不用管了
+}
+
+// 纯内核：无输入法过滤，do_message 直接透传到未过滤路径
+void do_message(uint64_t msg_type, uint64_t hData, uint64_t lData, MsgPrcor WinMpf, tcb_t ftask)
+{
+    do_message_unfiltered(msg_type, hData, lData, WinMpf, ftask);
+}
+
+int message_getch_try(xtttp_dtt *terminal)
+{
+    spin_lock(&getch_lock);
+    int result = -1;
+    if (terminal->getch_count)
+    {
+        result = (unsigned char)terminal->getch_bytes[terminal->getch_head];
+        terminal->getch_head = (terminal->getch_head + 1) % 128;
+        --terminal->getch_count;
+    }
+    else terminal->wait_for_getch = true;
+    spin_unlock(&getch_lock);
+    return result;
 }
 
 void init_message()

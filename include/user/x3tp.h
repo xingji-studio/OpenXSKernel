@@ -27,6 +27,8 @@ typedef struct
     bool  wait_for_getch;   // true  = waiting getch
     bool  wait_for_input;   // true  = waiting input (for console)
     char  char_for_getch;
+    uint32_t getch_head, getch_count;
+    char getch_bytes[128];
     uint32_t input_flags;
     char input[1024];
     char output[1024];
@@ -38,3 +40,4 @@ int check_input_waiting_status();
 int read_terminal_app_output_buffer(char *str);
 int write_terminal_app_output_buffer(const char *str);
 void terminal_finish_app_output();
+int message_getch_try(xtttp_dtt *terminal);

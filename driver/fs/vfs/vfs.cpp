@@ -1337,8 +1337,8 @@ static size_t stdin_read(int drive, uint8_t *buffer, size_t number, size_t lba) 
     xtttp_dtt *terminal = current_xtttp_terminal();
     if (terminal != NULL)
     {
-        terminal->wait_for_input = true;
-        while (!terminal->input_lock)
+        terminal->sink.wait_for_input = true;
+        while (!terminal->sink.input_lock)
         {
             scheduler_yield();
         }
@@ -1349,12 +1349,12 @@ static size_t stdin_read(int drive, uint8_t *buffer, size_t number, size_t lba) 
         char c;
         if (terminal != NULL)
         {
-            c = terminal->input[0];
+            c = terminal->sink.input[0];
             if (c == '\0') break;
-            size_t remaining = strlen(terminal->input);
+            size_t remaining = strlen(terminal->sink.input);
             if (remaining > 0)
             {
-                memmove(terminal->input, terminal->input + 1, remaining);
+                memmove(terminal->sink.input, terminal->sink.input + 1, remaining);
             }
         }
         else
@@ -1383,15 +1383,15 @@ static size_t stdin_read(int drive, uint8_t *buffer, size_t number, size_t lba) 
 
     if (terminal != NULL)
     {
-        if (terminal->input[0] == '\0')
+        if (terminal->sink.input[0] == '\0')
         {
-            terminal->input_lock = false;
-            terminal->wait_for_input = false;
+            terminal->sink.input_lock = false;
+            terminal->sink.wait_for_input = false;
         }
         else
         {
-            terminal->input_lock = true;
-            terminal->wait_for_input = false;
+            terminal->sink.input_lock = true;
+            terminal->sink.wait_for_input = false;
         }
     }
 
@@ -1511,7 +1511,7 @@ static errno_t tty_poll(size_t events)
         xtttp_dtt *terminal = current_xtttp_terminal();
         if (terminal != NULL)
         {
-            if (terminal->input[0] != '\0') revents |= POLLIN;
+            if (terminal->sink.input[0] != '\0') revents |= POLLIN;
         }
         else
         {

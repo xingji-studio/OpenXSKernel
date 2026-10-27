@@ -13,7 +13,6 @@
 #include <mm/frame.h>
 #include <pipe.h>
 
-static spin_t getch_lock = SPIN_INIT;
 
 static bool message_pipe_write_handle_valid(tcb_t task, fd_file_handle **out_handle)
 {
@@ -162,20 +161,20 @@ void do_message_unfiltered(uint64_t msg_type, uint64_t hData, uint64_t lData, Ms
 
     tcb_t current = ftask;
 
-    // MSG_CHAR 携带一个打包的 UTF-8 字符（最多 4 字节），喂进终端环形缓冲
+    // MSG_CHAR 携带一个打包的 UTF-8 字符（最多 4 字节），喂进 sink 环形缓冲
     if (msg_type == MSG_CHAR)
     {
-        xtttp_dtt *terminal = current->parent_group->xtttp_stc;
+        input_sink_t *sink = &current->parent_group->xtttp_stc->sink;
         char bytes[8]; memcpy(bytes, &lData, sizeof(bytes));
         size_t count = ime_utf8_scalar_bytes(bytes, 4);
-        spin_lock(&getch_lock);
-        if ((terminal->wait_for_getch || terminal->getch_count) && count && terminal->getch_count + count <= 128)
+        spin_lock(&sink->lock);
+        if ((sink->wait_for_getch || sink->getch_count) && count && sink->getch_count + count <= INPUT_SINK_GETCH_CAP)
         {
             for (size_t i = 0; i < count; ++i)
-                terminal->getch_bytes[(terminal->getch_head + terminal->getch_count++) % 128] = bytes[i];
-            terminal->wait_for_getch = false;
+                sink->getch_bytes[(sink->getch_head + sink->getch_count++) % INPUT_SINK_GETCH_CAP] = bytes[i];
+            sink->wait_for_getch = false;
         }
-        spin_unlock(&getch_lock);
+        spin_unlock(&sink->lock);
     }
 
     // 检查是否有注册的信号处理函数
@@ -201,18 +200,18 @@ void do_message(uint64_t msg_type, uint64_t hData, uint64_t lData, MsgPrcor WinM
     do_message_unfiltered(msg_type, hData, lData, WinMpf, ftask);
 }
 
-int message_getch_try(xtttp_dtt *terminal)
+int message_getch_try(input_sink_t *sink)
 {
-    spin_lock(&getch_lock);
+    spin_lock(&sink->lock);
     int result = -1;
-    if (terminal->getch_count)
+    if (sink->getch_count)
     {
-        result = (unsigned char)terminal->getch_bytes[terminal->getch_head];
-        terminal->getch_head = (terminal->getch_head + 1) % 128;
-        --terminal->getch_count;
+        result = (unsigned char)sink->getch_bytes[sink->getch_head];
+        sink->getch_head = (sink->getch_head + 1) % INPUT_SINK_GETCH_CAP;
+        --sink->getch_count;
     }
-    else terminal->wait_for_getch = true;
-    spin_unlock(&getch_lock);
+    else sink->wait_for_getch = true;
+    spin_unlock(&sink->lock);
     return result;
 }
 

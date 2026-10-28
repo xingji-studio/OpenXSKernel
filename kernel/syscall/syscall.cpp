@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <fs/vfs/vfs.h>
 #include <installer_protocol.h>
+#include <openxj380/syscall.h>
 #include <math.hpp>
 #include <mm/lazyalloc.h>
 #include <mm/vma.h>
@@ -739,6 +740,9 @@ extern "C" uint64_t c_syscall_handler(struct X64_REGS *regs, uint64_t user_rsp)
     case SXAH_GET_LOG_CONFIG: regs->rax = serial_log_config_get(); break;
 
     default:
+        // kmod syscall 钩子：让内核模块（如 OpenXJ380 IME 兼容层）接管内核
+        // 不认识的 syscall 号（如 XAPI_IME_* 7474-7485）。返回 true = 已处理。
+        if (OpenXJ380Socket_DispatchSyscall(syscall_number, regs)) break;
         regs->rax = (uint64_t)-ENOSYS;
         write_serial_string("Unknown syscall index: ");
         write_serial_dec(syscall_number);

@@ -1,5 +1,6 @@
 #include <input_sink.h>
 #include <syscall/pxapi.h>
+#include <dlinker.h>
 #include <krlibc.h>
 
 // 静态表：BSS 零初始化即空表、无焦点。
@@ -48,3 +49,11 @@ input_sink_t *input_sink_focus(void)
 {
     return input_sink_lookup(g_focus_id);
 }
+
+// 导出输入原语，供 OpenXJ380 IME 兼容 kmod 注册拦截器与焦点 sink。
+EXPORT_SYMBOL(input_route_set_interceptor);
+EXPORT_SYMBOL(input_route_interceptor);
+EXPORT_SYMBOL(input_sink_register);
+EXPORT_SYMBOL(input_sink_lookup);
+EXPORT_SYMBOL(input_sink_set_focus);
+EXPORT_SYMBOL(input_sink_focus);

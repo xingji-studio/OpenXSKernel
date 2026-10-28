@@ -1,4 +1,5 @@
 #include <cpu/msr.h>
+#include <dlinker.h>
 #include <errno.h>
 #include <fs/vfs/vfs.h>
 #include <ime_utf8.h>
@@ -229,6 +230,10 @@ int message_getch_try(input_sink_t *sink)
     sink->getch_tail = tail + 1;
     return (int)(unsigned char)c;
 }
+
+// 导出输入路由与读取原语，供 OpenXJ380 IME 兼容 kmod 注入提交文本、读键。
+EXPORT_SYMBOL(input_route_dispatch);
+EXPORT_SYMBOL(message_getch_try);
 
 void init_message()
 {

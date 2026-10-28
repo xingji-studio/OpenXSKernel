@@ -5,6 +5,19 @@
 static input_sink_t *g_sinks[INPUT_SINK_MAX];
 static uint32_t g_focus_id = 0;   // 0 = 无焦点
 
+// 输入流拦截器（内核态 IME manager）。NULL = 无拦截器，走快路径。
+static input_interceptor_fn g_interceptor = NULL;
+
+void input_route_set_interceptor(input_interceptor_fn fn)
+{
+    g_interceptor = fn;
+}
+
+input_interceptor_fn input_route_interceptor(void)
+{
+    return g_interceptor;
+}
+
 int input_sink_register(input_sink_t *sink)
 {
     if (sink == NULL) return -1;

@@ -157,7 +157,6 @@ uint64_t message_ask(uint64_t msg_type_p, uint64_t hdatap, uint64_t ldatap, uint
 
 // 输入流路由：MSG_CHAR 喂进当前焦点 sink 的环形缓冲。
 // focus-agnostic —— 内核只认焦点表，不关心消费者是终端还是 GUI 文本框。
-// 纯内核当前无拦截器，走快路径（Phase 3 会在此插入拦截钩子）。
 void input_route_dispatch(uint64_t msg_type, uint64_t hData, uint64_t lData, MsgPrcor WinMpf)
 {
     (void)hData;
@@ -165,6 +164,13 @@ void input_route_dispatch(uint64_t msg_type, uint64_t hData, uint64_t lData, Msg
 
     if (msg_type != MSG_CHAR) return;
 
+    // 慢路径：有内核态拦截器（IME manager）时先拦截。
+    // 拦截器返回 true = 已消费（吞掉/改道/合成中），不再投递给 sink。
+    input_interceptor_fn interceptor = input_route_interceptor();
+    if (interceptor != NULL && interceptor(msg_type, lData))
+        return;
+
+    // 快路径：无拦截器或拦截器放行，直接投递给焦点 sink。
     input_sink_t *sink = input_sink_focus();
     if (sink == NULL) return;
 

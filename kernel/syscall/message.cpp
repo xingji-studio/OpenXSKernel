@@ -155,49 +155,50 @@ uint64_t message_ask(uint64_t msg_type_p, uint64_t hdatap, uint64_t ldatap, uint
     return 0;
 }
 
-void do_message_unfiltered(uint64_t msg_type, uint64_t hData, uint64_t lData, MsgPrcor WinMpf, tcb_t ftask)
+// 输入流路由：MSG_CHAR 喂进当前焦点 sink 的环形缓冲。
+// focus-agnostic —— 内核只认焦点表，不关心消费者是终端还是 GUI 文本框。
+// 纯内核当前无拦截器，走快路径（Phase 3 会在此插入拦截钩子）。
+void input_route_dispatch(uint64_t msg_type, uint64_t hData, uint64_t lData, MsgPrcor WinMpf)
 {
-    if (ftask == NULL || ftask->parent_group == NULL || ftask->parent_group->xtttp_stc == NULL) return;
+    (void)hData;
+    (void)WinMpf;
 
-    tcb_t current = ftask;
+    if (msg_type != MSG_CHAR) return;
 
-    // MSG_CHAR 携带一个打包的 UTF-8 字符（最多 4 字节），喂进 sink 环形缓冲
-    if (msg_type == MSG_CHAR)
+    input_sink_t *sink = input_sink_focus();
+    if (sink == NULL) return;
+
+    // MSG_CHAR 携带一个打包的 UTF-8 字符（最多 4 字节）
+    char bytes[8]; memcpy(bytes, &lData, sizeof(bytes));
+    size_t count = ime_utf8_scalar_bytes(bytes, 4);
+    spin_lock(&sink->lock);
+    if ((sink->wait_for_getch || sink->getch_count) && count && sink->getch_count + count <= INPUT_SINK_GETCH_CAP)
     {
-        input_sink_t *sink = &current->parent_group->xtttp_stc->sink;
-        char bytes[8]; memcpy(bytes, &lData, sizeof(bytes));
-        size_t count = ime_utf8_scalar_bytes(bytes, 4);
-        spin_lock(&sink->lock);
-        if ((sink->wait_for_getch || sink->getch_count) && count && sink->getch_count + count <= INPUT_SINK_GETCH_CAP)
-        {
-            for (size_t i = 0; i < count; ++i)
-                sink->getch_bytes[(sink->getch_head + sink->getch_count++) % INPUT_SINK_GETCH_CAP] = bytes[i];
-            sink->wait_for_getch = false;
-        }
-        spin_unlock(&sink->lock);
+        for (size_t i = 0; i < count; ++i)
+            sink->getch_bytes[(sink->getch_head + sink->getch_count++) % INPUT_SINK_GETCH_CAP] = bytes[i];
+        sink->wait_for_getch = false;
     }
-
-    // 检查是否有注册的信号处理函数
-    if (WinMpf != NULL && ftask->message_pipe_write_fd >= 0)
-    {
-        fd_file_handle *handle = NULL;
-        if (!message_pipe_write_handle_valid(ftask, &handle)) return;
-
-        MessageInfoFormat mif;
-        mif.WinMpf   = WinMpf;
-        mif.msg_type = msg_type;
-        mif.hData    = hData;
-        mif.lData    = lData;
-
-        vfs_write(handle->node, &mif, 0, sizeof(mif));
-    }
-    // 空的就不用管了
+    spin_unlock(&sink->lock);
 }
 
-// 纯内核：无输入法过滤，do_message 直接透传到未过滤路径
+// GUI 窗口消息投递：WinMpf 回调经 message pipe 送给指定 ftask。
+// 闭源 GUI worker 依赖此签名；与输入流路由（input_route_dispatch）解耦。
 void do_message(uint64_t msg_type, uint64_t hData, uint64_t lData, MsgPrcor WinMpf, tcb_t ftask)
 {
-    do_message_unfiltered(msg_type, hData, lData, WinMpf, ftask);
+    if (ftask == NULL || ftask->parent_group == NULL) return;
+
+    if (WinMpf == NULL || ftask->message_pipe_write_fd < 0) return;
+
+    fd_file_handle *handle = NULL;
+    if (!message_pipe_write_handle_valid(ftask, &handle)) return;
+
+    MessageInfoFormat mif;
+    mif.WinMpf   = WinMpf;
+    mif.msg_type = msg_type;
+    mif.hData    = hData;
+    mif.lData    = lData;
+
+    vfs_write(handle->node, &mif, 0, sizeof(mif));
 }
 
 int message_getch_try(input_sink_t *sink)

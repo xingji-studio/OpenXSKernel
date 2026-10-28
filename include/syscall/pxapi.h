@@ -358,6 +358,9 @@ uint64_t do_xapi_InstallerLog(uint64_t out);
 void init_syscall();
 
 // Proto (XAPI Edition)
+// 输入流路由：MSG_CHAR -> 焦点 sink（focus-agnostic，与 GUI 窗口消息投递解耦）。
+void input_route_dispatch(uint64_t msg_type, uint64_t hData, uint64_t lData, MsgPrcor WinMpf);
+// GUI 窗口消息投递：WinMpf 回调经 message pipe 送给指定 ftask（闭源 worker 依赖此签名）。
 void do_message(uint64_t msg_type, uint64_t hData, uint64_t lData, MsgPrcor WinMpf, tcb_t ftask);
 void init_message();
 bool init_notify_message(pcb_t process, uint64_t func);

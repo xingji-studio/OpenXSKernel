@@ -338,6 +338,9 @@ static void fatfs_apply_filinfo(vfs_node_t node, const FILINFO *fno) {
     node->createtime = ns;
     node->readtime   = ns;
     node->writetime  = ns;
+    // FAT 解析出的文件名统一经此出口通知内核态策略钩子（如 ime-kmod 的
+    // ime_vfs_resolved_name），用于给节点打保护标记。无钩子时是 no-op。
+    vfs_notify_resolved_name(node, fno->fname);
 }
 
 void fatfs_open(void *parent, const char *name, vfs_node_t node) {

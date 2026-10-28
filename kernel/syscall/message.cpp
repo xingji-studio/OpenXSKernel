@@ -1,4 +1,3 @@
-#include <cpu/lock.h>
 #include <cpu/msr.h>
 #include <errno.h>
 #include <fs/vfs/vfs.h>
@@ -177,14 +176,20 @@ void input_route_dispatch(uint64_t msg_type, uint64_t hData, uint64_t lData, Msg
     // MSG_CHAR 携带一个打包的 UTF-8 字符（最多 4 字节）
     char bytes[8]; memcpy(bytes, &lData, sizeof(bytes));
     size_t count = ime_utf8_scalar_bytes(bytes, 4);
-    spin_lock(&sink->lock);
-    if ((sink->wait_for_getch || sink->getch_count) && count && sink->getch_count + count <= INPUT_SINK_GETCH_CAP)
-    {
-        for (size_t i = 0; i < count; ++i)
-            sink->getch_bytes[(sink->getch_head + sink->getch_count++) % INPUT_SINK_GETCH_CAP] = bytes[i];
-        sink->wait_for_getch = false;
-    }
-    spin_unlock(&sink->lock);
+    if (count == 0) return;
+
+    // SPSC 无锁生产者：head 由本侧独占写，tail 由消费者独占写。
+    uint32_t head = sink->getch_head;
+    uint32_t tail = sink->getch_tail;
+    if (head - tail + count > INPUT_SINK_GETCH_CAP)
+        return;  // 满：丢弃本次按键（键盘输入可容忍丢键，不阻塞）
+
+    for (size_t i = 0; i < count; ++i)
+        sink->getch_bytes[(head + i) % INPUT_SINK_GETCH_CAP] = bytes[i];
+
+    // release 发布 head：先让数据可见，再推进 head。
+    __asm__ __volatile__("mfence" ::: "memory");
+    sink->getch_head = head + count;
 }
 
 // GUI 窗口消息投递：WinMpf 回调经 message pipe 送给指定 ftask。
@@ -209,17 +214,19 @@ void do_message(uint64_t msg_type, uint64_t hData, uint64_t lData, MsgPrcor WinM
 
 int message_getch_try(input_sink_t *sink)
 {
-    spin_lock(&sink->lock);
-    int result = -1;
-    if (sink->getch_count)
-    {
-        result = (unsigned char)sink->getch_bytes[sink->getch_head];
-        sink->getch_head = (sink->getch_head + 1) % INPUT_SINK_GETCH_CAP;
-        --sink->getch_count;
-    }
-    else sink->wait_for_getch = true;
-    spin_unlock(&sink->lock);
-    return result;
+    // SPSC 无锁消费者：head 由生产者写，tail 由本侧独占写。
+    uint32_t head = sink->getch_head;
+    __asm__ __volatile__("mfence" ::: "memory");  // acquire：head 先于数据读
+
+    uint32_t tail = sink->getch_tail;
+    if (head == tail)
+        return -1;  // 空
+
+    char c = sink->getch_bytes[tail % INPUT_SINK_GETCH_CAP];
+
+    __asm__ __volatile__("mfence" ::: "memory");  // 数据读完，推进 tail
+    sink->getch_tail = tail + 1;
+    return (int)(unsigned char)c;
 }
 
 void init_message()

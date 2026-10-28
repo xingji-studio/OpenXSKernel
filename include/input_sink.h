@@ -1,6 +1,5 @@
 #pragma once
 #include <stdint.h>
-#include <cpu/lock.h>
 
 // 输入流 sink：输入流的消费端，与终端身份解耦。
 // 虚拟键盘 / IME / GUI 文本框的输入都汇入一个 sink；内核只认 id，不关心消费者是谁。
@@ -10,11 +9,11 @@
 
 typedef struct input_sink {
     uint32_t id;               // 焦点表中的 id（0 = 未注册）
-    spin_t   lock;             // 每 sink 独立锁，保护 getch 环形缓冲
-    uint32_t getch_head;
-    uint32_t getch_count;
+    // SPSC 无锁环形缓冲：getch_head 由生产者独占写，getch_tail 由消费者独占读。
+    // 二者单调递增（uint32 回绕安全），(head - tail) 即当前占用字节数。
+    volatile uint32_t getch_head;   // 生产者：下一写入位置
+    volatile uint32_t getch_tail;   // 消费者：下一读取位置
     char     getch_bytes[INPUT_SINK_GETCH_CAP];
-    bool     wait_for_getch;
     uint32_t input_flags;
     bool     wait_for_input;
     bool     input_lock;
@@ -33,5 +32,5 @@ input_sink_t *input_sink_lookup(uint32_t id);
 void          input_sink_set_focus(uint32_t id);
 input_sink_t *input_sink_focus(void);
 
-// 从 sink 环形缓冲非阻塞读一个键：-1 表示空（并置 wait_for_getch）。
+// 从 sink 环形缓冲非阻塞读一个键：-1 表示空。SPSC 无锁。
 int message_getch_try(input_sink_t *sink);

@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE — OpenXSKernel
 
-**Generated:** 2026-10-25
-**Commit:** 88149ac
+**Generated:** 2026-10-28
+**Commit:** f4a9fd3
 **Branch:** main
 
 ## OVERVIEW
@@ -140,3 +140,48 @@ Build env vars: `COMPILER_PREFIX`, `CC`, `CPP`, `NASM`, `LD`, `OBJC`,
   (illegal-char handling + LFN), modeled on Linux `fs/fat/namei_vfat.c` — not app-level
   alias registration. OpenXJ380's hardcoded xbps-key VFS alias is the anti-pattern.
 - **PID1 decoupled:** kernel reads `BootConfig.init` (boot.conf); no hardcoded shell path.
+
+---
+
+## 输入路由 + IME kmod 架构（C 方案，2026-10-28 定稿）
+
+精简内核只保留**输入原语 + 通用钩子 + 符号导出**；IME 业务（焦点匹配、事件队列、投递、
+会话、配置、词库）全部放进独立仓库 `ime-kmod`（可加载 `.sys`）。
+
+### 输入原语（内核保留）
+- sink 注册表 + 焦点表：`include/input_sink.h`、`kernel/input_sink.cpp`。
+- 输入流拦截器：`input_route_set_interceptor` / `input_route_interceptor`，签名
+  `bool (*)(uint64_t msg_type, uint64_t lData, uint64_t callback, tcb_t task)`。
+- 路由/投递：`input_route_dispatch`、`do_message`、`do_message_unfiltered`、`message_getch_try`。
+- 消息常量：`MSG_CHAR`/`MSG_KEYDOWN`/`MSG_KEYUP`/`MSG_SPCHAR`/`MSG_KEYLONGPRESS`（`include/syscall/pxapi.h`）。
+
+### VFS 通用保护/解析钩子（内核保留）
+- 枚举 `vfs_access_op_t`：`VFS_ACCESS_READ/WRITE/REMOVE/MOUNT`（`include/fs/vfs/vfs.h`）。
+- 钩子类型 `vfs_access_hook_t` / `vfs_resolved_name_hook_t`；注册 `vfs_set_access_hook` /
+  `vfs_set_resolved_name_hook`（均已导出）。
+- 内核内部调用点：`vfs_access_allowed` / `vfs_notify_resolved_name`（无钩子时放行/no-op）。
+- `vfs_node.ime_protection` 字段 = 内核态对象策略标记，由 resolved-name 钩子设置。
+
+### pcb/tcb 精简
+- 已移除 IME 字段：`ime_role`、`ime_launch_generation`、`ime_config_depth`、
+  `ime_storage_depth`、`ime_launch_role`。kmod 不得读写，改用 per-task 侧表 + 静态 pid
+  （见 `ime-kmod/AGENTS.md`）。
+
+### 符号导出（EXPORT_SYMBOL / _OBJECT / _F）
+- 已导出：vfs 原语、mutex 原语（含 `mutex_lock_recoverable`）、alloc 原语
+  （`malloc/free/calloc/realloc/aligned_alloc` 经 `__wrap_*`）、user 原语
+  （`current_user`/`rootdir` 对象、`user_session_is_ready`）、`xapi_json_*`、
+  page-table 原语（`translate_address`/`page_table_get_flags`/`lazy_tryalloc`）、
+  `vfs_set_access_hook`/`vfs_set_resolved_name_hook`。
+- dlinker 用 `dlinker_mangled_global_matches` 把 kmod 的 C++ mangled 符号匹配到导出名。
+
+### kmod 加载
+- `kmod/ime/ime.cpp` 是占位 skeleton（dlmain 注册空 interceptor + syscall hook）；真实业务在 ime-kmod。
+- dlinker 经 `find_export(handle, "dlmain")` 定位入口；`dlmain`/`dlstart` 必须 unmangled +
+  `visibility("default")`（编译 flags `-fvisibility=hidden` 下只有它们导出）。
+
+### 分支策略（2026-10-28 定稿）
+- `main` = reduced-kernel 方案（**胜出，因为有 kmod**），HEAD `f4a9fd3`。
+- `rc/upstream-ime` = 落选方案（全量移植上游 IME），保留作历史，不删。
+- `test/fatfs-unpack-debug` = FAT rename 修复调试分支，**保留但不合并**（含 `write_serial_fmt` 诊断噪声）。
+- FAT rename 修复的干净版 `e79ca2c` 已在 `main`；`0921f76` 是带调试噪声的版本，勿合入。

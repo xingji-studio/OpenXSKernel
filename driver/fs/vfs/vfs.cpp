@@ -6,6 +6,7 @@
 #define ALL_IMPLEMENTATION
 
 #include "fs/vfs/vfs.h"
+#include <dlinker.h>
 #include "errno.h"
 // #include "iso9660.h"
 #include "krlibc.h"
@@ -1658,3 +1659,15 @@ void stdio_init()
 {
     init_tty();
 }
+
+// 导出 VFS 原语，供 ime-kmod（.sys 模块）在加载时解析。
+EXPORT_SYMBOL(vfs_open);
+EXPORT_SYMBOL(vfs_close);
+EXPORT_SYMBOL(vfs_read);
+EXPORT_SYMBOL(vfs_write);
+EXPORT_SYMBOL(vfs_resize);
+EXPORT_SYMBOL(vfs_delete);
+EXPORT_SYMBOL(vfs_mkfile);
+EXPORT_SYMBOL(vfs_mkdir);
+EXPORT_SYMBOL(normalize_path);
+EXPORT_SYMBOL_OBJECT(rootdir);

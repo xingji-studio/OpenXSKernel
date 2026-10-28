@@ -1,4 +1,5 @@
 #include "mutex.h"
+#include <dlinker.h>
 #include "errno.h"
 #include "task/scheduler.h"
 #include "smp/smp.h"
@@ -245,6 +246,14 @@ tcb_t mutex_get_owner(mutex_t *mutex) {
  * Do not release a lock held by a live thread: doing so would let two threads
  * mutate the protected state concurrently.
  */
+// 导出互斥原语，供 ime-kmod 使用。
+EXPORT_SYMBOL(mutex_create);
+EXPORT_SYMBOL(mutex_lock);
+EXPORT_SYMBOL(mutex_trylock);
+EXPORT_SYMBOL(mutex_unlock);
+EXPORT_SYMBOL(mutex_lock_recoverable);
+EXPORT_SYMBOL(mutex_abort_for_process);
+
 bool mutex_abort_for_process(mutex_t *mutex, pcb_t process)
 {
     if (mutex == NULL || process == NULL) return false;

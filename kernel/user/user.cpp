@@ -3,6 +3,7 @@
 #include <efi/boot.h>
 #include <efi/efi.h>
 #include <efi/fbc.h>
+#include <dlinker.h>
 #include <elf.h>
 #include <errno.h>
 #include <fs/fatfs/fatfs.h>
@@ -259,6 +260,11 @@ bool user_session_is_ready()
 {
     return __atomic_load_n(&user_session_ready_flag, __ATOMIC_ACQUIRE) != 0;
 }
+
+// 导出用户态会话原语，供 ime-kmod 使用。
+EXPORT_SYMBOL(user_session_is_ready);
+EXPORT_SYMBOL(create_user_process_from_file);
+EXPORT_SYMBOL_OBJECT(current_user);
 
 void user_session_set_ready(bool ready)
 {

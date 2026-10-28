@@ -359,7 +359,14 @@ void init_syscall();
 
 // Proto (XAPI Edition)
 // 输入流路由：MSG_CHAR -> 焦点 sink（focus-agnostic，与 GUI 窗口消息投递解耦）。
-void input_route_dispatch(uint64_t msg_type, uint64_t hData, uint64_t lData, MsgPrcor WinMpf);
+// 输入流拦截器（内核态 IME manager 注册）：返回 true = 已消费（吞掉/改道），
+// false = 放行。签名对齐上游 ime_filter_message(type, value, callback, task)，
+// 使 IME 业务能以 kmod 形式注册进来做焦点匹配。callback = (uint64_t)WinMpf。
+typedef bool (*input_interceptor_fn)(uint64_t msg_type, uint64_t lData, uint64_t callback, tcb_t task);
+void                input_route_set_interceptor(input_interceptor_fn fn);
+input_interceptor_fn input_route_interceptor(void);
+
+void input_route_dispatch(uint64_t msg_type, uint64_t hData, uint64_t lData, MsgPrcor WinMpf, tcb_t task);
 // GUI 窗口消息投递：WinMpf 回调经 message pipe 送给指定 ftask（闭源 worker 依赖此签名）。
 void do_message(uint64_t msg_type, uint64_t hData, uint64_t lData, MsgPrcor WinMpf, tcb_t ftask);
 void init_message();

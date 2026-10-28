@@ -1,4 +1,5 @@
 #include <input_sink.h>
+#include <syscall/pxapi.h>
 #include <krlibc.h>
 
 // 静态表：BSS 零初始化即空表、无焦点。

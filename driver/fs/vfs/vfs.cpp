@@ -1671,3 +1671,5 @@ EXPORT_SYMBOL(vfs_mkfile);
 EXPORT_SYMBOL(vfs_mkdir);
 EXPORT_SYMBOL(normalize_path);
 EXPORT_SYMBOL_OBJECT(rootdir);
+EXPORT_SYMBOL(vfs_set_access_hook);
+EXPORT_SYMBOL(vfs_set_resolved_name_hook);

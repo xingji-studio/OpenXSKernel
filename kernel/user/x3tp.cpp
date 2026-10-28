@@ -26,8 +26,8 @@ void init_process_xtttp(pcb_t pcb)
     // pcb->xtttp_stc->input    = (char *)malloc(1024 * sizeof(char));
     memset(pcb->xtttp_stc->output, 0, sizeof(char) * 1024);
     // pcb->xtttp_stc->output   = (char *)malloc(1024 * sizeof(char));
-    memset(pcb->xtttp_stc->input, 0, sizeof(char) * 1024);
-    pcb->xtttp_stc->input_flags = 0;
+    memset(pcb->xtttp_stc->sink.input, 0, sizeof(pcb->xtttp_stc->sink.input));
+    pcb->xtttp_stc->sink.input_flags = 0;
 }
 
 int check_terminal_init_status()
@@ -42,37 +42,44 @@ void mark_process_is_terminal()
     tcb_t current = get_current_task();
     init_process_xtttp(current->parent_group);
     current->parent_group->xtttp_stc->is_shell = true;
+    int sid = input_sink_register(&current->parent_group->xtttp_stc->sink);
+    if (sid >= 0)
+        input_sink_set_focus((uint32_t)sid);
 }
 
 int check_input_waiting_status()
 {
     tcb_t current = get_current_task();
     if (current == NULL || current->parent_group == NULL || current->parent_group->xtttp_stc == NULL ||
-        !current->parent_group->xtttp_stc->wait_for_input)
+        !current->parent_group->xtttp_stc->sink.wait_for_input)
         return 0;
 
     int status = XTTTP_INPUT_STATUS_WAITING;
-    if ((current->parent_group->xtttp_stc->input_flags & XAPI_INPUT_NO_ECHO) != 0)
+    if ((current->parent_group->xtttp_stc->sink.input_flags & XAPI_INPUT_NO_ECHO) != 0)
         status |= XTTTP_INPUT_STATUS_NO_ECHO;
     return status;
 }
 
-int read_terminal_app_output_buffer(char *str)
+int read_terminal_app_output_buffer(char *str, size_t capacity)
 {
     tcb_t current = get_current_task();
-    if (str == NULL || current == NULL || current->parent_group == NULL || current->parent_group->xtttp_stc == NULL) {
+    if (str == NULL || current == NULL || current->parent_group == NULL || current->parent_group->xtttp_stc == NULL)
         return -EFAULT;
-    }
+    if (capacity == 0)
+        return -EINVAL;
 
     char output[1024];
     memset(output, 0, sizeof(output));
     if (current->parent_group->xtttp_stc->output_lock)
-    {
         return copy_to_user_pagedir(current->parent_group->pagedir, str, output, 1) ? 0 : -EFAULT;
-    }
 
     strncpy(output, current->parent_group->xtttp_stc->output, sizeof(output) - 1);
-    return copy_to_user_pagedir(current->parent_group->pagedir, str, output, sizeof(output)) ? 0 : -EFAULT;
+    output[sizeof(output) - 1] = '\0';
+    size_t len = strnlen(output, sizeof(output) - 1);
+    if (len >= capacity)
+        len = capacity - 1;
+    output[len] = '\0';
+    return copy_to_user_pagedir(current->parent_group->pagedir, str, output, len + 1) ? 0 : -EFAULT;
 }
 
 int write_terminal_app_output_buffer(const char *str)
@@ -82,19 +89,19 @@ int write_terminal_app_output_buffer(const char *str)
         return -EFAULT;
 
     xtttp_dtt *xtttp = current->parent_group->xtttp_stc;
-    size_t cur = strnlen(xtttp->input, sizeof(xtttp->input));
-    if (cur >= sizeof(xtttp->input)) cur = 0;
-    size_t space = sizeof(xtttp->input) - cur - 1;
+    size_t cur = strnlen(xtttp->sink.input, sizeof(xtttp->sink.input));
+    if (cur >= sizeof(xtttp->sink.input)) cur = 0;
+    size_t space = sizeof(xtttp->sink.input) - cur - 1;
     size_t len = 0;
     while (len < space)
     {
         char ch;
         if (!copy_from_user_pagedir(current->parent_group->pagedir, &ch, str + len, 1)) return -EFAULT;
         if (ch == '\0') break;
-        xtttp->input[cur + len++] = ch;
+        xtttp->sink.input[cur + len++] = ch;
     }
-    xtttp->input[cur + len] = '\0';
-    current->parent_group->xtttp_stc->input_lock = true;
+    xtttp->sink.input[cur + len] = '\0';
+    current->parent_group->xtttp_stc->sink.input_lock = true;
     return 0;
 }
 

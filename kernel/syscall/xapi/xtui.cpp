@@ -350,28 +350,28 @@ int do_xapi_Input(char *str, size_t capacity, uint64_t flags)
         }
         if (front_p->xtttp_stc->is_shell)
         {
-            front_p->xtttp_stc->input_flags = (uint32_t)flags;
-            front_p->xtttp_stc->wait_for_input = true;
+            front_p->xtttp_stc->sink.input_flags = (uint32_t)flags;
+            front_p->xtttp_stc->sink.wait_for_input = true;
             // 等待命令行输入
             while (true)
             {
-                if (front_p->xtttp_stc->input_lock) break;
+                if (front_p->xtttp_stc->sink.input_lock) break;
                 scheduler_yield();
             }
-            size_t input_len = p_xapi_strnlen(front_p->xtttp_stc->input, sizeof(front_p->xtttp_stc->input) - 1);
-            while (input_len > 0 && (front_p->xtttp_stc->input[input_len - 1] == '\n' ||
-                                     front_p->xtttp_stc->input[input_len - 1] == '\r'))
+            size_t input_len = p_xapi_strnlen(front_p->xtttp_stc->sink.input, sizeof(front_p->xtttp_stc->sink.input) - 1);
+            while (input_len > 0 && (front_p->xtttp_stc->sink.input[input_len - 1] == '\n' ||
+                                     front_p->xtttp_stc->sink.input[input_len - 1] == '\r'))
                 input_len--;
-            front_p->xtttp_stc->input[input_len] = '\0';
+            front_p->xtttp_stc->sink.input[input_len] = '\0';
             if (input_len >= capacity) input_len = capacity - 1;
-            bool copied = copy_to_user_pagedir(xapi_current_pagedir(), str, front_p->xtttp_stc->input, input_len);
+            bool copied = copy_to_user_pagedir(xapi_current_pagedir(), str, front_p->xtttp_stc->sink.input, input_len);
             char terminator = '\0';
             if (copied)
                 copied = copy_to_user_pagedir(xapi_current_pagedir(), str + input_len, &terminator, 1);
-            memset(front_p->xtttp_stc->input, 0, sizeof(front_p->xtttp_stc->input));
-            front_p->xtttp_stc->input_lock = false;
-            front_p->xtttp_stc->wait_for_input = false;
-            front_p->xtttp_stc->input_flags = 0;
+            memset(front_p->xtttp_stc->sink.input, 0, sizeof(front_p->xtttp_stc->sink.input));
+            front_p->xtttp_stc->sink.input_lock = false;
+            front_p->xtttp_stc->sink.wait_for_input = false;
+            front_p->xtttp_stc->sink.input_flags = 0;
             return copied ? 0 : -EFAULT;
         }
         front_p = front_p->parent_task;
@@ -394,15 +394,12 @@ char do_xapi_Getch()
         }
         if (front_p->xtttp_stc->is_shell)
         {
-            // 等待命令行输入
-            front_p->xtttp_stc->wait_for_getch = true;
             while (true)
             {
-                if (!front_p->xtttp_stc->wait_for_getch) break;
+                int value = message_getch_try(&front_p->xtttp_stc->sink);
+                if (value >= 0) return (char)value;
                 scheduler_yield();
             }
-            // found it!
-            return front_p->xtttp_stc->char_for_getch;
         }
         front_p = front_p->parent_task;
     }

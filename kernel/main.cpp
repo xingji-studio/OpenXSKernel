@@ -549,7 +549,10 @@ extern "C" void KernelMain(const FrameBufferConfig &fbc, EFI_SYSTEM_TABLE &Syste
         write_serial_string("AHCI: keeping conservative IO path on vmware/real hardware\n");
     }
     user_session_use_root();
-    create_user_process_from_file((char *)"/system/leopard/leopard-rc.elf", NULL, NULL);
+    /* PID1 由引导器经 BOOT_CONFIG.init 指定（boot.conf），内核不再硬编码；空则回退默认 */
+    const char *init_path = BootConfig.init[0] ? BootConfig.init : "/system/leopard/leopard-rc.elf";
+    write_serial_fmt("BOOT: launching init %s\n", init_path);
+    create_user_process_from_file((char *)init_path, NULL, NULL);
 
 
     // delay_s_hp(60);

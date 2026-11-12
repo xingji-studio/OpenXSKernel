@@ -160,6 +160,7 @@ typedef struct vfs_filesystem {
 } *vfs_filesystem_t;
 
 struct vfs_node {           // vfs节点
+    uint64_t   ime_protection; // 内核态对象策略标记（模块经 resolved-name 钩子设置）
     vfs_node_t parent;      // 父目录
     vfs_node_t linkto;      // 符号链接指向的节点
     char      *name;        // 名称
@@ -210,6 +211,25 @@ enum {
 extern struct vfs_callback vfs_empty_callback;
 extern vfs_node_t          rootdir;
 extern struct llist_header fs_metadata_list;
+
+// 通用 VFS 访问策略钩子（内核态模块注册，如 IME 文件保护）。返回 true = 放行。
+// 无钩子时默认放行，不影响精简内核的普通文件访问。
+typedef enum {
+    VFS_ACCESS_READ = 0,
+    VFS_ACCESS_WRITE = 1,
+    VFS_ACCESS_REMOVE = 2,
+    VFS_ACCESS_MOUNT = 3,
+} vfs_access_op_t;
+
+typedef bool (*vfs_access_hook_t)(vfs_node_t node, const char *path, vfs_access_op_t op);
+typedef void (*vfs_resolved_name_hook_t)(vfs_node_t node, const char *name);
+
+void vfs_set_access_hook(vfs_access_hook_t fn);
+void vfs_set_resolved_name_hook(vfs_resolved_name_hook_t fn);
+// 内核内部：访问策略判定（无钩子时默认放行）
+bool vfs_access_allowed(vfs_node_t node, const char *path, vfs_access_op_t op);
+// 内核内部：FAT 名称解析后回调（无钩子时 no-op）
+void vfs_notify_resolved_name(vfs_node_t node, const char *name);
 
 void vfs_child_lock();
 void vfs_child_unlock();

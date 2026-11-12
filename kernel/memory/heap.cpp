@@ -131,3 +131,10 @@ void *calloc(size_t num, size_t size)
     return ptr;
 }
 EXPORT_SYMBOL(calloc);
+// 模块 ABI 引用必须进入 IRQ 安全的 wrapper（见上方 --wrap 注释）。
+// 用标准名导出 __wrap_*，让 .sys 模块的 malloc/free/realloc/aligned_alloc 引用
+// 在加载时解析到带 IRQ 保护 + 堆扩展重试的实现。
+EXPORT_SYMBOL_F(malloc, __wrap_malloc);
+EXPORT_SYMBOL_F(free, __wrap_free);
+EXPORT_SYMBOL_F(realloc, __wrap_realloc);
+EXPORT_SYMBOL_F(aligned_alloc, __wrap_aligned_alloc);

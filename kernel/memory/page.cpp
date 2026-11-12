@@ -1031,3 +1031,5 @@ void page_setup()
 EXPORT_SYMBOL(page_map_range);
 EXPORT_SYMBOL(page_map_range_to);
 EXPORT_SYMBOL(page_map_range_to_random);
+EXPORT_SYMBOL(translate_address);
+EXPORT_SYMBOL(page_table_get_flags);

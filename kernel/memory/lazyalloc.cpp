@@ -1,6 +1,7 @@
 #include <proto.hpp>
 #include <mm/lazyalloc.h>
 #include <errno.h>
+#include <dlinker.h>
 
 
 void *virt_copy(void *ptr) {
@@ -259,3 +260,5 @@ void lazy_free(pcb_t process) {
         }
     }
 }
+
+EXPORT_SYMBOL(lazy_tryalloc);

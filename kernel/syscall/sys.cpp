@@ -3645,6 +3645,24 @@ sys_(getdents64, int fd, void *dents, size_t size)
 sys_(newfstatat, int dirfd, char *pathname, struct stat *buf, uint64_t flags)
 {
     if (buf == NULL) return SYSCALL_FAULT_(EINVAL);
+
+    /* AT_EMPTY_PATH + 空路径：直接 stat dirfd 指向的节点（等同 fstat(dirfd)） */
+    if (flags & AT_EMPTY_PATH) {
+        char *kpath = NULL;
+        int kret = copy_string_from_user(&kpath, pathname, USER_PATH_MAX);
+        if (kret < 0) return SYSCALL_FAULT_((int)-kret);
+        int empty = (kpath[0] == '\0');
+        free(kpath);
+        if (empty) {
+            fd_file_handle *handle = (fd_file_handle *)queue_get(get_current_task()->parent_group->file_open, dirfd);
+            if (handle == NULL) return SYSCALL_FAULT_(EBADF);
+            struct stat kstat;
+            uint64_t sret = fill_stat_from_node(handle->node, &kstat);
+            if ((int64_t)sret < 0) return sret;
+            return copy_stat_to_user(buf, &kstat);
+        }
+    }
+
     char *resolved = NULL;
     int path_ret = resolve_user_path_at(dirfd, pathname, &resolved);
     if (path_ret < 0) return SYSCALL_FAULT_((int)-path_ret);
@@ -4340,6 +4358,9 @@ sys_(rename, char *oldpath, char *newpath)
         free(nnewpath);
         return SYSCALL_FAULT_(ENOMEM);
     }
+    if (!vfs_access_allowed(NULL, noldpath, VFS_ACCESS_REMOVE) ||
+        !vfs_access_allowed(NULL, nnewpath, VFS_ACCESS_WRITE))
+    { free(noldpath); free(nnewpath); return SYSCALL_FAULT_(EACCES); }
     vfs_node_t oldnode  = vfs_open_no_follow(noldpath);
     if (!oldnode)
     {
@@ -4385,6 +4406,14 @@ sys_(renameat, int olddirfd, char *oldpath, int newdirfd, char *newpath)
     {
         free(resolved_old);
         return SYSCALL_FAULT_((int)-path_ret);
+    }
+
+    if (!vfs_access_allowed(NULL, resolved_old, VFS_ACCESS_REMOVE) ||
+        !vfs_access_allowed(NULL, resolved_new, VFS_ACCESS_WRITE))
+    {
+        free(resolved_old);
+        free(resolved_new);
+        return SYSCALL_FAULT_(EACCES);
     }
 
     vfs_node_t oldnode = vfs_open_no_follow(resolved_old);
@@ -5208,6 +5237,7 @@ sys_(mincore, uint64_t addr, uint64_t size, uint64_t vec)
 
 sys_(pivot_root, char *new_root, char *put_old)
 {
+    if (!vfs_access_allowed(NULL, NULL, VFS_ACCESS_MOUNT)) return SYSCALL_FAULT_(EPERM);
     //TODO 未经测试和验证的实现
     vfs_node_t nroot = vfs_open(new_root);
     vfs_node_t src_root;

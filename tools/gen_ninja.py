@@ -81,6 +81,14 @@ def main():
         "rule kernel_link",
         "  command = $ld -z muldefs -T linker.ld --static --wrap=malloc --wrap=calloc --wrap=free --wrap=realloc --wrap=aligned_alloc -o $out $in",
         "",
+        "rule kmod_cxx",
+        "  command = mkdir -p $$(dirname $out) && $cxx -fPIC -fvisibility=hidden $cpp_flags -MF $out.d -c $in -o $out",
+        "  depfile = $out.d",
+        "  deps = gcc",
+        "",
+        "rule kmod_link",
+        "  command = $cxx -shared $in -nostdlib -Wl,-e,dlmain -o $out",
+        "",
     ]
     objs = []
     for rule, files in (("nasm", nasm_files), ("root_as", asm_files),
@@ -97,6 +105,18 @@ def main():
     inputs = " ".join(esc(o) for o in objs) + " out/font/hankaku.o liballoc-x86_64.a"
     L += [f"build out/kernel.krl: kernel_link {inputs} | linker.ld", ""]
 
+    # ---- 可加载内核模块（.sys，dlmain 入口）----
+    ime_objs = []
+    for src in find("kmod/ime", (".cpp",)):
+        rel_src = src.relative_to(ROOT)
+        obj = Path("out") / rel_src.with_suffix(".o")
+        L += [f"build {esc(obj)}: kmod_cxx {esc(rel_src)}"]
+        ime_objs.append(obj)
+    if ime_objs:
+        ime_inputs = " ".join(esc(o) for o in ime_objs)
+        L += [f"build out/ime.sys: kmod_link {ime_inputs}", ""]
+        L += ["build kmods: phony out/ime.sys", ""]
+
     # ---- xbps 打包（pack）----
     pkg = {"name": "OpenXSKernel", "ver": "2.1.0_1", "arch": "x86_64",
            "desc": "Leopard kernel", "install": "system/kernel.krl"}
@@ -105,7 +125,7 @@ def main():
     L += [
         "rule package",
         f"  command = rm -rf .pkg && mkdir -p .pkg/$$(dirname {pkg['install']}) && "
-        f"cp out/kernel.krl .pkg/{pkg['install']} && cd out && xbps-create {pkg_args} ../.pkg",
+        f"cp out/kernel.krl .pkg/{pkg['install']} && cd out && xbps-create --compression gzip {pkg_args} ../.pkg",
         "",
         f"build {xbps_out}: package out/kernel.krl",
         "build build: phony out/kernel.krl",

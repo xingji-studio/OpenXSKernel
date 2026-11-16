@@ -1,6 +1,9 @@
+#include <net/xnet_provider.h>
 #include "build_settings.h"
+#include "build_config.h"
 #include <ahci/ahci.h>
 #include <cpu/regio.h>
+#include <cpu/idle.h>
 #include <device.h>
 #include <cpu/fsgsbase.h>
 #include <console.h>
@@ -9,6 +12,7 @@
 #include <efi/efi.h>
 #include <efi/fbc.h>
 #include <fs/fatfs/fatfs.h>
+#include <fs/ext4/ext4.h>
 #include <fs/partition.h>
 #include <fs/vfs/devfs.h>
 #include <fs/vfs/vfs.h>
@@ -22,6 +26,7 @@
 #include <openxj380/socket.h>
 #include <openxj380/syscall.h>
 #include <pci/pci.h>
+#include <rng.h>
 #include <pipe.h>
 #include <power.h>
 #include <proto.hpp>
@@ -30,6 +35,7 @@
 #include <ps2/mouse.h>
 #include <rtc.h>
 #include <sb16.h>
+#include <audio_backend.h>
 #include <syscall/signal.h>
 #include <syscall/pxapi.h>
 #include <syscall/syscall.h>
@@ -41,6 +47,9 @@
 #include <hda/vsound.h>
 #include <hda/hda.h>
 #include <installer_mode.h>
+#include <installer/jobs.h>
+#include <installer/context.h>
+#include <errno.h>
 
 const FrameBufferConfig *fbc_addr;
 
@@ -244,6 +253,135 @@ extern BOOT_CONFIG *EFI_BC;
 
 extern UserInfo *current_user;
 
+static char busybox_alias_applets[][16] = {
+    "[",       "[[",      "ash",      "awk",      "basename", "cat",      "chmod",   "chgrp",
+    "chown",   "clear",   "cmp",      "cp",       "cut",      "date",     "dd",      "df",
+    "dirname", "dmesg",   "du",       "echo",     "egrep",    "env",      "false",   "fgrep",
+    "find",    "free",    "grep",     "gunzip",   "gzip",     "head",     "hexdump", "hostname",
+    "id",      "ifconfig","install",  "ip",       "kill",     "killall",  "less",    "ln",
+    "ls",
+    "mkdir",   "more",    "mount",    "mv",       "nc",       "netstat",  "nslookup","od",
+    "pgrep",   "pidof",   "ping",     "pkill",    "printenv", "printf",   "ps",      "pwd",
+    "readlink","realpath","reset",    "rm",       "rmdir",    "route",    "sed",     "sh",
+    "sleep",   "sort",    "stat",     "stty",     "sync",     "tail",     "tar",     "test",
+    "top",     "touch",   "tr",       "true",     "tty",      "umount",   "uname",   "uniq",
+    "unzip",   "uptime",  "usleep",   "vi",       "wc",       "which",   "whoami",
+    "xargs",   "xxd",     "zcat",     NULL,
+};//暴力枚举这一块，好像只能这么做了
+  //Maybe we can try to load this applet when vfs inited.
+
+static int load_busybox_alias_applets()
+{
+    vfs_node_t vfp = vfs_open("/etc/busybox/alias/applets.csv");
+    if(!vfp) return -1;
+    char csv[1024] /* = malloc(vfs -> size) */;
+    char * csv_pointer = csv;
+    memset(csv, 0, 1024 /* vfs -> size / sizeof(char) */);
+    int idx = 0, i = 0;
+    
+    if(vfp -> size >= sizeof(csv)) {
+        idx = -2;
+        goto cleanup;
+    }
+    vfs_read(vfp, csv, 0, vfp -> size);
+
+    while(true) {
+        int j = 0;
+        while(true) {
+            switch(*csv_pointer)
+            {
+            case ',':
+            case '\r':
+            case '\n':
+                csv_pointer++;
+                busybox_alias_applets[i][j] = '\0';
+                goto finish_load;
+            case '\0':
+                busybox_alias_applets[i][j] = '\0';
+                goto finish;
+            default:
+                busybox_alias_applets[i][j] = *csv_pointer;
+                csv_pointer++;
+                j++;
+            }
+        }
+    finish_load:
+        i++;
+    }
+
+finish:
+    i++;
+    busybox_alias_applets[i][0] = '\0'; 
+cleanup:
+    vfs_close(vfp);
+    /* free(csv); */
+    return idx;
+}
+
+/*
+static void load_busybox_alias_applets()
+{
+    char setfile_path[32] = "/etc/busybox/alias/applets.dat";
+    vfs_node_t vfp = vfs_open(setfile_path);
+    if (!vfp) return;
+    char csv[1024];
+    char alias[9];
+    int applet_index = 0, alias_index = 0;
+    const int applet_count = sizeof(busybox_alias_applets) / sizeof(busybox_alias_applets[0]);
+    if (vfp->size >= sizeof(csv)) goto cleanup;
+    vfs_read(vfp, csv, 0, vfp->size);
+    memset(alias, 0, 9);
+    for (uint64_t i = 0; i < vfp->size && applet_index < applet_count - 1; i++)
+    {
+        if (csv[i] == ',')
+        {
+            strcpy(busybox_alias_applets[applet_index], alias);
+            applet_index++;
+            alias_index = 0;
+            memset(alias, 0, sizeof(alias));
+            continue;
+        }
+        if (alias_index < sizeof(alias) - 1) alias[alias_index++] = csv[i];
+    }
+    if (alias_index > 0 && applet_index < applet_count - 1) strcpy(busybox_alias_applets[applet_index], alias);
+
+cleanup:
+    vfs_close(vfp);
+}
+*/
+
+static const char *busybox_binary_path = "/apps/busybox/busybox";
+
+static void setup_xbps_vfs_aliases()
+{
+    static const char *xbps_void_key_alias =
+        "/var/db/xbps/keys/60:ae:0c:d6:f0:95:17:80:bc:93:46:7a:89:af:a3:2d.plist";
+    static const char *xbps_void_key_target =
+        "/var/db/xbps/keys/60_ae_0c_d6_f0_95_17_80_bc_93_46_7a_89_af_a3_2d.plist";
+
+    if (vfs_register_alias(xbps_void_key_alias, xbps_void_key_target) == EOK)
+    {
+        write_serial_fmt("[xbps-debug] key alias %s -> %s\n", xbps_void_key_alias, xbps_void_key_target);
+    }
+}
+
+static void setup_busybox_vfs_aliases()
+{
+    const char *prefixes[] = {"/apps", "/bin", NULL};
+    for (int p = 0; prefixes[p] != NULL; p++)
+    {
+        for (int i = 0; busybox_alias_applets[i][0] != '\0'; i++)
+        {
+            char alias_path[128];
+            snprintf(alias_path, sizeof(alias_path), "%s/%s", prefixes[p], busybox_alias_applets[i]);
+            if (vfs_register_alias(alias_path, busybox_binary_path) == EOK)
+            {
+                write_serial_fmt("[busybox-debug] busybox alias %s -> %s\n", alias_path, busybox_binary_path);
+            }
+        }
+    }
+}
+
 void init_cpu()
 {
     __asm__ __volatile__("movq %%cr0, %%rax\n\t"
@@ -372,7 +510,7 @@ extern void     xhci_start_workers();
 extern void     mount_root();
 extern void     stdio_init();
 extern int      socketfs_setup();
-extern int      procfs_setup();
+extern void     procfs_setup();
 extern int      dnsfs_setup();
 extern int      nmfs_setup();
 extern int      tmpfs_setup();
@@ -380,9 +518,33 @@ EFI_SYSTEM_TABLE *EFI_ST;
 BOOT_CONFIG *EFI_BC;
 static BOOT_CONFIG g_kernel_boot_config;
 
-extern "C" void KernelMain(const FrameBufferConfig &fbc, EFI_SYSTEM_TABLE &SystemTable, BOOT_CONFIG &BootConfigIn)
+static void installer_boot_require(int result, const char *phase)
 {
-    memcpy(&g_kernel_boot_config, &BootConfigIn, sizeof(g_kernel_boot_config));
+    if (result >= 0) return;
+    write_serial_fmt("installer: %s failed=%d; no system-root fallback\n", phase, result);
+    for (;;) __asm__ volatile("cli; hlt" ::: "memory");
+}
+
+static void installer_check_mount(const char *path)
+{
+    vfs_node_t node = vfs_open(path);
+    bool mounted = node && node->is_mount && node->fsid != rootdir->fsid;
+    if (node) vfs_close(node);
+    installer_boot_require(mounted ? 0 : -ENODEV, path);
+}
+
+extern "C" void KernelMain(const FrameBufferConfig &fbc, EFI_SYSTEM_TABLE &SystemTable, const void *BootConfigIn)
+{
+    // Old bootloaders provide only the legacy prefix, with no extension tail.
+    memset(&g_kernel_boot_config, 0, sizeof(g_kernel_boot_config));
+    memcpy(&g_kernel_boot_config, BootConfigIn, BOOT_CONFIG_LEGACY_BYTES);
+    if ((g_kernel_boot_config.boot_flags & BOOT_FLAG_BOUND_ROOT) != 0)
+        memcpy(&g_kernel_boot_config.root_binding, (const unsigned char *)BootConfigIn + BOOT_CONFIG_LEGACY_BYTES,
+               sizeof(XJ_ROOT_BINDING));
+    if ((g_kernel_boot_config.boot_flags & BOOT_FLAG_INSTALLER_HANDOFF) != 0)
+        memcpy(&g_kernel_boot_config.installer_handoff,
+               (const unsigned char *)BootConfigIn + __builtin_offsetof(BOOT_CONFIG, installer_handoff),
+               sizeof(XJ_INSTALLER_HANDOFF));
     BOOT_CONFIG &BootConfig = g_kernel_boot_config;
 
     fbc_addr = &fbc;
@@ -399,6 +561,9 @@ extern "C" void KernelMain(const FrameBufferConfig &fbc, EFI_SYSTEM_TABLE &Syste
     init_apic(BootConfig.MADT);
 
     init_hhdm();
+    int installer_boot_status = installer::session_boot_prepare(BootConfig, BootConfigIn);
+    if ((BootConfig.boot_flags & BOOT_FLAG_INSTALLER) != 0)
+        write_serial_fmt("installer: boot memory proof result=%d\n", installer_boot_status);
     init_frame(BootConfig.MemoryMap);
     init_heap();
 
@@ -410,6 +575,7 @@ extern "C" void KernelMain(const FrameBufferConfig &fbc, EFI_SYSTEM_TABLE &Syste
     write_serial_string("BOOT: vfs_init done\n");
     write_serial_string("BOOT: fatfs_init begin\n");
     fatfs_init();
+    ext4fs_init();
     write_serial_string("BOOT: fatfs_init done\n");
     write_serial_string("BOOT: devfs_setup begin\n");
     devfs_setup();
@@ -420,6 +586,7 @@ extern "C" void KernelMain(const FrameBufferConfig &fbc, EFI_SYSTEM_TABLE &Syste
     write_serial_string("BOOT: pci_setup done\n");
     write_serial_string("BOOT: pci_init begin\n");
     pci_init();
+    rng_init();
     write_serial_string("BOOT: pci_init done\n");
     write_serial_fmt("VM hint: %s\n", BootConfig.is_qemu == 1 ? "QEMU/BOCHS" : "generic/VMware/real hardware");
     if (BootConfig.boot_flags != 0) write_serial_fmt("Boot option flags: 0x%llx\n", BootConfig.boot_flags);
@@ -450,11 +617,9 @@ extern "C" void KernelMain(const FrameBufferConfig &fbc, EFI_SYSTEM_TABLE &Syste
 
     // disable_intr();
 #if !OPENXJ380_INPUT_OUTPUT_DISABLED
-    // HDA 驱动现在会在初始化阶段自行完成注册，这里只需要启动探测即可。
-    hda_init();
-    hda_regist();
+    // Probe one shared audio output: HDA, ICH AC97, ES1371, then ISA SB16.
+    audio_backend_init();
 #endif
-    // sb16_init();
 
     keyboard_init();
     mouse_init();
@@ -474,6 +639,7 @@ extern "C" void KernelMain(const FrameBufferConfig &fbc, EFI_SYSTEM_TABLE &Syste
     tcb_t idle_thread            = (tcb_t)aligned_alloc(16, idle_alloc_size);
     if (idle_thread != NULL) memset(idle_thread, 0, sizeof(struct thread_control_block));
     if (idle_thread == NULL) while (true) { __asm__ volatile("hlt"); }
+    idle_thread->task_level   = TASK_IDLE_LEVEL;
     idle_thread->tid          = __atomic_fetch_add(&now_tid, 1, __ATOMIC_SEQ_CST);
     idle_thread->parent_group = kernel_group;
     idle_thread->kernel_stack = get_rsp();
@@ -499,23 +665,73 @@ extern "C" void KernelMain(const FrameBufferConfig &fbc, EFI_SYSTEM_TABLE &Syste
     xhci_start_workers();
 #endif
 
-    bool installer_mode = installer_boot_active(BootConfig);
-    if (installer_mode)
-        installer_prepare_root(BootConfig);
-    else
+    bool installer_mode = false;
+    if ((BootConfig.boot_flags & BOOT_FLAG_INSTALLER) != 0)
+    {
+        if (installer_boot_status == 0)
+        {
+            installer_boot_status = installer::session_packages_prepare();
+            write_serial_fmt("installer: complete package validation result=%d\n", installer_boot_status);
+            if (installer_boot_status == 0)
+            {
+                installer_boot_status = installer::session_source_prepare();
+                write_serial_fmt("installer: retained source lifetime result=%d\n", installer_boot_status);
+                if (installer_boot_status == 0)
+                {
+                    installer_boot_status = installer::root_prepare_private();
+                    installer::RootStageSnapshot root_stage = {};
+                    installer::root_stage_snapshot(&root_stage);
+                    write_serial_fmt("installer: private root result=%d entries=%llu bytes=%llu published=%u\n",
+                                     installer_boot_status, root_stage.entries, root_stage.data_bytes,
+                                     unsigned(root_stage.published));
+                    if (installer_boot_status == 0)
+                    {
+                        installer_boot_status = installer::root_publish_private();
+                        installer::root_stage_snapshot(&root_stage);
+                        write_serial_fmt("installer: root publication result=%d entries=%llu published=%u\n",
+                                         installer_boot_status, root_stage.entries, unsigned(root_stage.published));
+                    }
+                }
+            }
+        }
+        installer_boot_require(installer_boot_status, "root preparation");
+        installer_mode = true;
+    }
+    if (!installer_mode)
+    {
         mount_root();
+#if CONFIG_KERNEL_BUSYBOX_ALIASES
+        setup_busybox_vfs_aliases();
+#endif
+        setup_xbps_vfs_aliases();
+    }
     if (!installer_root_is_tmpfs_ready()) tmpfs_setup();
+    if (installer_mode) installer_boot_require(installer::root_prepare_mountpoint("/pipe"), "pipe mountpoint");
     pipefs_setup();
+    if (installer_mode) installer_check_mount("/pipe");
     pty_init();
     fsgsbase_init();
-    socketfs_setup();
+    if (installer_mode) installer_boot_require(installer::root_prepare_mountpoint("/sock"), "socket mountpoint");
+    int socket_status = socketfs_setup();
+    if (installer_mode)
+    {
+        installer_boot_require(socket_status, "socket setup");
+        installer_check_mount("/sock");
+        installer_boot_require(installer::root_prepare_mountpoint("/proc"), "proc mountpoint");
+    }
     procfs_setup();
-    dnsfs_setup();
-    nmfs_setup();
+    if (installer_mode) installer_check_mount("/proc");
+    // The installer has no network modules or normal-user session services.
+    if (!installer_mode)
+    {
+        dnsfs_setup();
+        nmfs_setup();
+    }
     stdio_init();
 
     signal_init();
     init_syscall();
+    if (int error = xnet_init()) write_serial_fmt("XNet worker initialization failed: %d\n", error);
     init_message();
 
     if (!OPENXJ380_INPUT_OUTPUT_DISABLED &&
@@ -536,6 +752,9 @@ extern "C" void KernelMain(const FrameBufferConfig &fbc, EFI_SYSTEM_TABLE &Syste
     }
 
     init_reaper();
+    // Publish the permanent TX worker after all CPU queues exist. Bootstrap
+    // output remains synchronous until this handoff succeeds.
+    if (!serial_runtime_start()) write_serial_string("Serial TX worker initialization failed.\n");
     write_serial_string("Process Reaper is ready\n");
 
     if (BootConfig.is_qemu == 1) pr_warn("XJ380 is running under the QEMU/BOCHS.\n");
@@ -548,12 +767,12 @@ extern "C" void KernelMain(const FrameBufferConfig &fbc, EFI_SYSTEM_TABLE &Syste
     } else {
         write_serial_string("AHCI: keeping conservative IO path on vmware/real hardware\n");
     }
-    user_session_use_root();
-    /* PID1 由引导器经 BOOT_CONFIG.init 指定（boot.conf），内核不再硬编码；空则回退默认 */
-    const char *init_path = BootConfig.init[0] ? BootConfig.init : "/system/leopard/leopard-rc.elf";
-    write_serial_fmt("BOOT: launching init %s\n", init_path);
-    create_user_process_from_file((char *)init_path, NULL, NULL);
-
+    // The Apache provider intentionally has no product graphical installer.
+    // It can validate/publish the root, but never admits native writes or
+    // falls back to a shell when that trusted entry is unavailable.
+    if (installer_mode) installer_boot_require(-EOPNOTSUPP, "graphical installer unavailable in provider");
+    user_session_use_login();
+    create_user_process_from_file((char *)"/apps/system/shell/shell.elf", NULL, NULL);
 
     // delay_s_hp(60);
 
@@ -562,9 +781,11 @@ extern "C" void KernelMain(const FrameBufferConfig &fbc, EFI_SYSTEM_TABLE &Syste
     // create_user_thread((void *)utsk, NULL, (char *)"test_task2", ugp);
 
 
+    // Publish runtime IRQ policy before any CPU can dispatch a worker. A
+    // pending timer can preempt immediately after STI, before the next store.
+    no_interrupt = false;
     scheduler_start();
     open_interrupt;
-    no_interrupt = false;
 
     // no_interrupt = true;
     // close_interrupt;
@@ -576,11 +797,6 @@ extern "C" void KernelMain(const FrameBufferConfig &fbc, EFI_SYSTEM_TABLE &Syste
 
     while (true)
     {
-        if (!no_interrupt)
-        {
-            enable_intr();
-        }
-
-        __asm__ __volatile__("pause");
+        cpu_idle_once(no_interrupt);
     }
 }

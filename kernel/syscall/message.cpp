@@ -1,8 +1,11 @@
+#include <input_method.h>
+#include <ime_utf8.h>
+static ImeTextSink ime_text_sink;
+void ime_set_text_sink(ImeTextSink sink) { ime_text_sink = sink; }
+static spin_t getch_lock = SPIN_INIT;
 #include <cpu/msr.h>
-#include <dlinker.h>
 #include <errno.h>
 #include <fs/vfs/vfs.h>
-#include <ime_utf8.h>
 #include <mm/alloc/alloc.h>
 #include <pctable/gdt.h>
 #include <pctable/idt.h>
@@ -12,50 +15,261 @@
 #include <task/pcb.h>
 #include <mm/frame.h>
 #include <pipe.h>
+#include <syscall/fd_lifetime.h>
+#include <syscall/message_queue.h>
+#include <task/kernel_worker.h>
 
-
-static bool message_pipe_write_handle_valid(tcb_t task, fd_file_handle **out_handle)
+namespace {
+constexpr size_t kMessageLimitPerPipe = 4096;
+constexpr size_t kMessageLimitGlobal = 32768;
+constexpr unsigned kMessageBuckets = 256;
+struct PendingMessage
 {
-    if (out_handle != NULL) *out_handle = NULL;
-    if (task == NULL || task->parent_group == NULL || task->message_pipe_write_fd < 0) return false;
+    MessageInfoFormat value;
+    FdOperationRecord *operation;
+    PendingMessage *next;
+};
+struct MessageChannel
+{
+    pipe_info_t *identity;
+    PendingMessage *head, *tail;
+    MessageChannel *bucket_next, *ready_next, *ready_prev;
+    size_t count;
+    bool overflow_reported;
+};
+spin_t message_queue_lock = SPIN_INIT;
+MessageChannel *message_channels[kMessageBuckets];
+MessageChannel *message_ready;
+size_t message_pending_count;
+bool message_worker_ready;
+bool message_allocation_reported;
+bool message_capacity_reported;
 
-    fd_file_handle *handle =
-        (fd_file_handle *)queue_get(task->parent_group->file_open, (size_t)task->message_pipe_write_fd);
-    if (handle == NULL || handle->node == NULL || !(handle->node->type & file_pipe) || handle->node->handle == NULL)
-    {
-        return false;
-    }
-
-    pipe_specific_t *spec = (pipe_specific_t *)handle->node->handle;
-    if (spec == NULL || !spec->write || spec->info == NULL)
-    {
-        return false;
-    }
-
-    if (out_handle != NULL) *out_handle = handle;
-    return true;
+unsigned message_bucket(pipe_info_t *identity)
+{
+    return unsigned((uintptr_t(identity) >> 4) ^ (uintptr_t(identity) >> 16)) & (kMessageBuckets - 1);
 }
 
-static bool notify_pipe_write_handle_valid(pcb_t process, fd_file_handle **out_handle)
+pipe_info_t *message_pipe(FdOperationRecord *operation)
 {
-    if (out_handle != NULL) *out_handle = NULL;
-    if (process == NULL || process->file_open == NULL || process->notify_pcor_pipe_write_fd < 0) return false;
+    fd_file_handle *handle = fd_operation_handle(operation);
+    if (!handle || !handle->node || !(handle->node->type & file_pipe)) return NULL;
+    auto *spec = static_cast<pipe_specific_t *>(handle->node->handle);
+    return spec && spec->write ? spec->info : NULL;
+}
 
-    fd_file_handle *handle =
-        (fd_file_handle *)queue_get(process->file_open, (size_t)process->notify_pcor_pipe_write_fd);
-    if (handle == NULL || handle->node == NULL || !(handle->node->type & file_pipe) || handle->node->handle == NULL)
+FdOperationRecord *message_acquire_channel(tcb_t task, uint64_t &inode, int &error)
+{
+    error = -EBADF;
+    if (!task || !task->parent_group || task->status == DEATH || task->status == OUT ||
+        task->message_pipe_read_fd < 0 || task->message_pipe_write_fd < 0 ||
+        task->message_pipe_read_fd == task->message_pipe_write_fd) return NULL;
+    FdOperationRecord *writer = fd_operation_acquire_process(task->parent_group, task->message_pipe_write_fd, error);
+    if (!writer) return NULL;
+    FdOperationRecord *reader = fd_operation_acquire_process(task->parent_group, task->message_pipe_read_fd, error);
+    bool valid = false;
+    if (reader)
     {
-        return false;
+        fd_file_handle *read_handle = fd_operation_handle(reader);
+        fd_file_handle *write_handle = fd_operation_handle(writer);
+        auto *read_spec = static_cast<pipe_specific_t *>(read_handle->node->handle);
+        pipe_info_t *pipe = message_pipe(writer);
+        valid = (read_handle->node->type & file_pipe) && read_spec && !read_spec->write && pipe &&
+                read_spec->info == pipe && read_handle->node->inode == write_handle->node->inode &&
+                read_handle->node->dev == write_handle->node->dev;
+        if (valid) inode = write_handle->node->inode;
     }
+    fd_operation_release(reader);
+    if (valid) return writer;
+    fd_operation_release(writer);
+    if (!error) error = -EBADF;
+    return NULL;
+}
 
-    pipe_specific_t *spec = (pipe_specific_t *)handle->node->handle;
-    if (spec == NULL || !spec->write || spec->info == NULL)
+// No producer writes directly to a message pipe. This common publication point
+// orders input, animation and notification records for each original endpoint.
+int message_enqueue(FdOperationRecord *operation, const MessageInfoFormat &value)
+{
+    pipe_info_t *identity = message_pipe(operation);
+    if (!identity) { fd_operation_release(operation); return -EBADF; }
+    auto *packet = static_cast<PendingMessage *>(malloc(sizeof(PendingMessage)));
+    auto *candidate = static_cast<MessageChannel *>(calloc(1, sizeof(MessageChannel)));
+    if (!packet || !candidate)
     {
-        return false;
+        free(packet);
+        free(candidate);
+        fd_operation_release(operation);
+        return -ENOMEM;
     }
+    *packet = {value, operation, NULL};
+    int error = 0;
+    bool report = false;
+    spin_lock(&message_queue_lock);
+    unsigned index = message_bucket(identity);
+    MessageChannel *channel = message_channels[index];
+    while (channel && channel->identity != identity) channel = channel->bucket_next;
+    if (!message_worker_ready) error = -ENOSYS;
+    else if (message_pending_count >= kMessageLimitGlobal) error = -ENOBUFS;
+    else if (channel && channel->count >= kMessageLimitPerPipe) error = -EAGAIN;
+    else if (!fd_operation_transfer_to_kernel(operation)) error = -EBADF;
+    if (!error)
+    {
+        if (!channel)
+        {
+            channel = candidate;
+            candidate = NULL;
+            channel->identity = identity;
+            channel->bucket_next = message_channels[index];
+            message_channels[index] = channel;
+            if (!message_ready)
+            {
+                channel->ready_next = channel->ready_prev = channel;
+                message_ready = channel;
+            }
+            else
+            {
+                channel->ready_next = message_ready;
+                channel->ready_prev = message_ready->ready_prev;
+                channel->ready_prev->ready_next = channel;
+                message_ready->ready_prev = channel;
+            }
+        }
+        if (channel->tail) channel->tail->next = packet;
+        else channel->head = packet;
+        channel->tail = packet;
+        ++channel->count;
+        ++message_pending_count;
+    }
+    else if ((error == -ENOBUFS || error == -EAGAIN) && channel && !channel->overflow_reported)
+    {
+        channel->overflow_reported = true;
+        report = true;
+    }
+    if ((error == -ENOBUFS || error == -EAGAIN) && !channel && !message_capacity_reported)
+    {
+        message_capacity_reported = true;
+        report = true;
+    }
+    spin_unlock(&message_queue_lock);
+    free(candidate);
+    if (error)
+    {
+        free(packet);
+        fd_operation_release(operation);
+    }
+    if (report) write_serial_string("message: pending queue full; new delivery rejected, existing FIFO retained\n");
+    return error;
+}
 
-    if (out_handle != NULL) *out_handle = handle;
-    return true;
+// Exactly one permanent kernel worker consumes channels. A full destination
+// keeps its FIFO head and rotates; it cannot hold up unrelated applications.
+bool message_delivery_pump(size_t budget)
+{
+    bool progress = false;
+    while (budget--)
+    {
+        spin_lock(&message_queue_lock);
+        MessageChannel *channel = message_ready;
+        if (!channel) { spin_unlock(&message_queue_lock); break; }
+        message_ready = channel->ready_next;
+        PendingMessage *packet = channel->head;
+        spin_unlock(&message_queue_lock);
+        int result = fd_operation_is_retired(packet->operation) ? -EPIPE :
+                     pipefs_try_write_packet(fd_operation_handle(packet->operation)->node,
+                                             &packet->value, sizeof(packet->value));
+        if (result == -EAGAIN) continue;
+        MessageChannel *empty = NULL;
+        spin_lock(&message_queue_lock);
+        channel->head = packet->next;
+        --channel->count;
+        --message_pending_count;
+        if (!channel->head)
+        {
+            unsigned index = message_bucket(channel->identity);
+            MessageChannel **link = &message_channels[index];
+            while (*link != channel) link = &(*link)->bucket_next;
+            *link = channel->bucket_next;
+            if (channel->ready_next == channel) message_ready = NULL;
+            else
+            {
+                channel->ready_prev->ready_next = channel->ready_next;
+                channel->ready_next->ready_prev = channel->ready_prev;
+                if (message_ready == channel) message_ready = channel->ready_next;
+            }
+            empty = channel;
+        }
+        spin_unlock(&message_queue_lock);
+        fd_operation_release(packet->operation);
+        free(packet);
+        free(empty);
+        progress = true;
+    }
+    return progress;
+}
+
+void message_delivery_worker(void *)
+{
+    for (;;)
+    {
+        message_delivery_pump(256);
+        scheduler_sleep_ns(1000000ULL);
+    }
+}
+
+void message_report_failure_once(int error)
+{
+    if (!error || error == -EBADF || error == -ESRCH || error == -EPIPE ||
+        error == -EAGAIN || error == -ENOBUFS) return;
+    spin_lock(&message_queue_lock);
+    bool report = !message_allocation_reported;
+    message_allocation_reported = true;
+    spin_unlock(&message_queue_lock);
+    if (report) write_serial_fmt("message: asynchronous delivery failed: %d\n", error);
+}
+}
+
+bool message_window_channel_valid(tcb_t task, uint64_t *inode_out)
+{
+    uint64_t inode = 0;
+    int error;
+    FdOperationRecord *operation = message_acquire_channel(task, inode, error);
+    if (!operation) return false;
+    bool valid = !fd_operation_is_retired(operation);
+    fd_operation_release(operation);
+    if (valid && inode_out) *inode_out = inode;
+    return valid;
+}
+
+int message_post_window(tcb_t task, const MessageInfoFormat &value, uint64_t expected_inode)
+{
+    uint64_t inode = 0;
+    int error;
+    FdOperationRecord *operation = message_acquire_channel(task, inode, error);
+    if (!operation) return error;
+    if (expected_inode && expected_inode != inode) { fd_operation_release(operation); return -EBADF; }
+    return message_enqueue(operation, value);
+}
+
+int message_post_notification(uint64_t pid, uint64_t notification_id, uint64_t action_id)
+{
+    uint64_t callback;
+    int error;
+    FdOperationRecord *operation = fd_operation_acquire_notification(pid, callback, error);
+    if (!operation) return error;
+    MessageInfoFormat value = {};
+    value.WinMpf = reinterpret_cast<MsgPrcor>(callback);
+    value.msg_type = notification_id;
+    value.hData = action_id;
+    return message_enqueue(operation, value);
+}
+
+static bool notify_pipe_write_handle_valid(pcb_t process)
+{
+    int error;
+    FdOperationRecord *operation = fd_operation_acquire_process(process, process->notify_pcor_pipe_write_fd, error);
+    bool valid = message_pipe(operation) != NULL;
+    fd_operation_release(operation);
+    return valid;
 }
 
 bool init_notify_message(pcb_t process, uint64_t func)
@@ -65,9 +279,8 @@ bool init_notify_message(pcb_t process, uint64_t func)
     process->notify_pcor_func       = func;
     process->notify_pcor_registered = true;
 
-    fd_file_handle *existing_handle = NULL;
     if (process->notify_pcor_pipe_read_fd >= 0 && process->notify_pcor_pipe_write_fd >= 0 &&
-        notify_pipe_write_handle_valid(process, &existing_handle))
+        notify_pipe_write_handle_valid(process))
     {
         return true;
     }
@@ -77,7 +290,7 @@ bool init_notify_message(pcb_t process, uint64_t func)
     process->notify_pcor_tid           = 0;
 
     int pipefd[2] = {-1, -1};
-    if ((int64_t)sys_pipe2(pipefd, 0, 0, 0, 0, 0, NULL) < 0)
+    if ((int64_t)sys_pipe2(pipefd, O_CLOEXEC, 0, 0, 0, 0, NULL) < 0)
     {
         process->notify_pcor_registered = false;
         write_serial_string("notify: pipe create failed\n");
@@ -155,85 +368,47 @@ uint64_t message_ask(uint64_t msg_type_p, uint64_t hdatap, uint64_t ldatap, uint
     return 0;
 }
 
-// 输入流路由：MSG_CHAR 喂进当前焦点 sink 的环形缓冲。
-// focus-agnostic —— 内核只认焦点表，不关心消费者是终端还是 GUI 文本框。
-void input_route_dispatch(uint64_t msg_type, uint64_t hData, uint64_t lData, MsgPrcor WinMpf, tcb_t task)
+void do_message_unfiltered(uint64_t msg_type, uint64_t hData, uint64_t lData, MsgPrcor WinMpf, tcb_t ftask)
 {
-    (void)hData;
+    if (ftask == NULL || ftask->parent_group == NULL || ftask->parent_group->xtttp_stc == NULL) return;
 
-    // 慢路径：有内核态拦截器（IME manager）时先拦截所有输入消息类型
-    // （KEYDOWN/KEYUP/CHAR/SPCHAR/LONGPRESS）——IME 需要按键事件做 shift-tap 检测。
-    // 拦截器返回 true = 已消费（吞掉/改道/合成中），不再投递。
-    input_interceptor_fn interceptor = input_route_interceptor();
-    if (interceptor != NULL && interceptor(msg_type, lData, (uint64_t)WinMpf, task))
-        return;
+    tcb_t current = ftask;
+    if (ime_text_sink) ime_text_sink(msg_type, lData, (uint64_t)WinMpf, ftask);
 
-    // 快路径：无拦截器或拦截器放行，只把 MSG_CHAR 投递给焦点 sink；
-    // 按键/修饰键事件仅对 IME/GUI 有意义，不进终端字节流。
-    if (msg_type != MSG_CHAR) return;
+    if (msg_type == MSG_CHAR)
+    {
+        xtttp_dtt *terminal = current->parent_group->xtttp_stc;
+        char bytes[8]; memcpy(bytes, &lData, sizeof(bytes));
+        size_t count = ime_utf8_scalar_bytes(bytes, 4);
+        spin_lock(&getch_lock);
+        if ((terminal->wait_for_getch || terminal->getch_count) && count && terminal->getch_count + count <= 128)
+        {
+            for (size_t i = 0; i < count; ++i)
+                terminal->getch_bytes[(terminal->getch_head + terminal->getch_count++) % 128] = bytes[i];
+            terminal->wait_for_getch = false;
+        }
+        spin_unlock(&getch_lock);
+    }
 
-    input_sink_t *sink = input_sink_focus();
-    if (sink == NULL) return;
+    // 检查是否有注册的信号处理函数
+    if (WinMpf != NULL && ftask->message_pipe_write_fd >= 0)
+    {
+        MessageInfoFormat mif;
+        mif.WinMpf   = WinMpf;
+        mif.msg_type = msg_type;
+        mif.hData    = hData;
+        mif.lData    = lData;
 
-    // MSG_CHAR 携带一个打包的 UTF-8 字符（最多 4 字节）
-    char bytes[8]; memcpy(bytes, &lData, sizeof(bytes));
-    size_t count = ime_utf8_scalar_bytes(bytes, 4);
-    if (count == 0) return;
-
-    // SPSC 无锁生产者：head 由本侧独占写，tail 由消费者独占写。
-    uint32_t head = sink->getch_head;
-    uint32_t tail = sink->getch_tail;
-    if (head - tail + count > INPUT_SINK_GETCH_CAP)
-        return;  // 满：丢弃本次按键（键盘输入可容忍丢键，不阻塞）
-
-    for (size_t i = 0; i < count; ++i)
-        sink->getch_bytes[(head + i) % INPUT_SINK_GETCH_CAP] = bytes[i];
-
-    // release 发布 head：先让数据可见，再推进 head。
-    __asm__ __volatile__("mfence" ::: "memory");
-    sink->getch_head = head + count;
+        message_report_failure_once(message_post_window(ftask, mif));
+    }
+    // 空的就不用管了
 }
 
-// GUI 窗口消息投递：WinMpf 回调经 message pipe 送给指定 ftask。
-// 闭源 GUI worker 依赖此签名；与输入流路由（input_route_dispatch）解耦。
 void do_message(uint64_t msg_type, uint64_t hData, uint64_t lData, MsgPrcor WinMpf, tcb_t ftask)
 {
-    if (ftask == NULL || ftask->parent_group == NULL) return;
-
-    if (WinMpf == NULL || ftask->message_pipe_write_fd < 0) return;
-
-    fd_file_handle *handle = NULL;
-    if (!message_pipe_write_handle_valid(ftask, &handle)) return;
-
-    MessageInfoFormat mif;
-    mif.WinMpf   = WinMpf;
-    mif.msg_type = msg_type;
-    mif.hData    = hData;
-    mif.lData    = lData;
-
-    vfs_write(handle->node, &mif, 0, sizeof(mif));
+    if (ime_filter_message(msg_type, lData, (uint64_t)WinMpf, ftask)) return;
+    do_message_unfiltered(msg_type, hData, lData, WinMpf, ftask);
 }
-
-int message_getch_try(input_sink_t *sink)
-{
-    // SPSC 无锁消费者：head 由生产者写，tail 由本侧独占写。
-    uint32_t head = sink->getch_head;
-    __asm__ __volatile__("mfence" ::: "memory");  // acquire：head 先于数据读
-
-    uint32_t tail = sink->getch_tail;
-    if (head == tail)
-        return -1;  // 空
-
-    char c = sink->getch_bytes[tail % INPUT_SINK_GETCH_CAP];
-
-    __asm__ __volatile__("mfence" ::: "memory");  // 数据读完，推进 tail
-    sink->getch_tail = tail + 1;
-    return (int)(unsigned char)c;
-}
-
-// 导出输入路由与读取原语，供 OpenXJ380 IME 兼容 kmod 注入提交文本、读键。
-EXPORT_SYMBOL(input_route_dispatch);
-EXPORT_SYMBOL(message_getch_try);
 
 void init_message()
 {
@@ -251,5 +426,26 @@ void init_message()
     memcpy((void *)(XJ380_PRIVATE_MESSAGE_REVERT_ADDRESS + XPSR_OFFEST), 
            (void *)message_thread, message_thread_size);
 
+    int64_t worker = static_cast<int64_t>(create_kernel_worker((void *)message_delivery_worker, NULL,
+                                                               "GUI Message Delivery"));
+    spin_lock(&message_queue_lock);
+    message_worker_ready = worker >= 0;
+    spin_unlock(&message_queue_lock);
+    if (worker < 0) write_serial_fmt("message: delivery worker creation failed: %d\n", worker);
     write_serial_fmt("XJ380 Message Initialize Success.\n");
+}
+
+int message_getch_try(xtttp_dtt *terminal)
+{
+    spin_lock(&getch_lock);
+    int result = -1;
+    if (terminal->getch_count)
+    {
+        result = (unsigned char)terminal->getch_bytes[terminal->getch_head];
+        terminal->getch_head = (terminal->getch_head + 1) % 128;
+        --terminal->getch_count;
+    }
+    else terminal->wait_for_getch = true;
+    spin_unlock(&getch_lock);
+    return result;
 }

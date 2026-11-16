@@ -1,10 +1,13 @@
+#include <net/xnet_provider.h>
+#include <user/permissions.h>
+#include <mm/uaccess.h>
+#include <screen_capture.h>
 #include "../build_settings.h"
 #include <cpu/fsgsbase.h>
 #include <cpu/msr.h>
 #include <errno.h>
 #include <fs/vfs/vfs.h>
 #include <installer_protocol.h>
-#include <openxj380/syscall.h>
 #include <math.hpp>
 #include <mm/lazyalloc.h>
 #include <mm/vma.h>
@@ -16,8 +19,8 @@
 #include <syscall/signal.h>
 #include <syscall/pxapi.h>
 #include <syscall/syscall.h>
+#include <syscall/file_io_scope.h>
 #include <task/poll.h>
-#include <power.h>
 
 // MSR寄存器地址定义
 #define MSR_EFER         0xC0000080 // EFER MSR寄存器
@@ -35,9 +38,6 @@ sys_(fchmodat, int dirfd, char *pathname, uint64_t mode, int flags);
 sys_(utimensat, int dirfd, char *pathname, const struct timespec *times, int flags);
 sys_(utimes, char *filename, const struct timeval *times);
 sys_(close_range, uint32_t first, uint32_t last, uint32_t flags);
-
-extern EFI_SYSTEM_TABLE *EFI_ST;
-extern BOOT_CONFIG *EFI_BC;
 
 static const char *debug_syscall_name(uint64_t nr)
 {
@@ -86,6 +86,7 @@ static const char *debug_syscall_name(uint64_t nr)
     case SYS_UNAME: return "uname";
     case SYS_FCNTL: return "fcntl";
     case SYS_FLOCK: return "flock";
+    case SYS_UMOUNT2: return "umount2";
     case SYS_SYNC: return "sync";
     case SYS_FSYNC: return "fsync";
     case SYS_FDATASYNC: return "fdatasync";
@@ -152,7 +153,18 @@ static const char *debug_syscall_name(uint64_t nr)
     case SYS_PRCTL: return "prctl";
     case SYS_ARCH_PRCTL: return "arch_prctl";
     case SYS_CHROOT: return "chroot";
+    case SYS_SETXATTR: return "setxattr";
+    case SYS_LSETXATTR: return "lsetxattr";
+    case SYS_FSETXATTR: return "fsetxattr";
+    case SYS_GETXATTR: return "getxattr";
+    case SYS_LGETXATTR: return "lgetxattr";
+    case SYS_FGETXATTR: return "fgetxattr";
+    case SYS_LISTXATTR: return "listxattr";
+    case SYS_LLISTXATTR: return "llistxattr";
     case SYS_FLISTXATTR: return "flistxattr";
+    case SYS_REMOVEXATTR: return "removexattr";
+    case SYS_LREMOVEXATTR: return "lremovexattr";
+    case SYS_FREMOVEXATTR: return "fremovexattr";
     case SYS_SET_TID_ADDRESS: return "set_tid_address";
     case SYS_FADVISE64: return "fadvise64";
     case SYS_COPY_FILE_RANGE: return "copy_file_range";
@@ -166,7 +178,6 @@ static const char *debug_syscall_name(uint64_t nr)
 
 static bool debug_trace_xbps_task()
 {
-    return false; /* 调试日志已关闭（每个 syscall 写串口极慢） */
     tcb_t task = get_current_task();
     if (task == NULL || task->parent_group == NULL || !task->parent_group->linux_abi) return false;
     return strstr(task->name, "xbps") != NULL || strstr(task->parent_group->name, "xbps") != NULL;
@@ -241,6 +252,7 @@ extern "C" uint64_t c_syscall_handler(struct X64_REGS *regs, uint64_t user_rsp)
     }
 
     uint64_t syscall_number = regs->rax;
+    FileIoSyscallScope file_io(syscall_number);
     bool trace_grep = debug_trace_grep_task();
     if (trace_grep)
     {
@@ -354,6 +366,7 @@ extern "C" uint64_t c_syscall_handler(struct X64_REGS *regs, uint64_t user_rsp)
         break;
     case SYS_FCNTL: regs->rax = (uint64_t)sys_fcntl(regs->rdi, regs->rsi, regs->rdx, 0, 0, 0, regs); break;
     case SYS_FLOCK: regs->rax = (uint64_t)sys_flock(regs->rdi, regs->rsi, 0, 0, 0, 0, regs); break;
+    case SYS_UMOUNT2: regs->rax = (uint64_t)sys_umount2(regs->rdi, regs->rsi, 0, 0, 0, 0, regs); break;
     case SYS_SYNC: regs->rax = (uint64_t)sys_sync(0, 0, 0, 0, 0, 0, regs); break;
     case SYS_FSYNC: regs->rax = (uint64_t)sys_fsync(regs->rdi, 0, 0, 0, 0, 0, regs); break;
     case SYS_FDATASYNC: regs->rax = (uint64_t)sys_fdatasync(regs->rdi, 0, 0, 0, 0, 0, regs); break;
@@ -427,11 +440,45 @@ extern "C" uint64_t c_syscall_handler(struct X64_REGS *regs, uint64_t user_rsp)
     case SYS_EXIT: sys_exit(regs->rdi, 0, 0, 0, 0, 0, regs); break;
     case SYS_EXIT_GROUP: sys_exit_group(regs->rdi, 0, 0, 0, 0, 0, regs); break;
     case SYS_TGKILL: regs->rax = (uint64_t)sys_tgkill(regs->rdi, regs->rsi, regs->rdx, 0, 0, 0, regs); break;
+    case SYS_SCHED_YIELD: regs->rax = (uint64_t)sys_yield(0, 0, 0, 0, 0, 0, regs); break;
     case SYS_GETPID: regs->rax = get_current_task()->parent_group->pid; break;
     case SYS_GETTID: regs->rax = get_current_task()->tid; break;
     case SYS_TIME: regs->rax = (uint64_t)sys_time((int64_t *)regs->rdi, 0, 0, 0, 0, 0, regs); break;
+    case SYS_SETXATTR:
+        regs->rax = sys_setxattr((const char *)regs->rdi, (const char *)regs->rsi, (const void *)regs->rdx, regs->r10, (int)regs->r8, 0, regs);
+        break;
+    case SYS_LSETXATTR:
+        regs->rax = sys_lsetxattr((const char *)regs->rdi, (const char *)regs->rsi, (const void *)regs->rdx, regs->r10, (int)regs->r8, 0, regs);
+        break;
+    case SYS_FSETXATTR:
+        regs->rax = sys_fsetxattr((int)regs->rdi, (const char *)regs->rsi, (const void *)regs->rdx, regs->r10, (int)regs->r8, 0, regs);
+        break;
+    case SYS_GETXATTR:
+        regs->rax = sys_getxattr((const char *)regs->rdi, (const char *)regs->rsi, (void *)regs->rdx, regs->r10, 0, 0, regs);
+        break;
+    case SYS_LGETXATTR:
+        regs->rax = sys_lgetxattr((const char *)regs->rdi, (const char *)regs->rsi, (void *)regs->rdx, regs->r10, 0, 0, regs);
+        break;
+    case SYS_FGETXATTR:
+        regs->rax = sys_fgetxattr((int)regs->rdi, (const char *)regs->rsi, (void *)regs->rdx, regs->r10, 0, 0, regs);
+        break;
+    case SYS_LISTXATTR:
+        regs->rax = sys_listxattr((const char *)regs->rdi, (char *)regs->rsi, regs->rdx, 0, 0, 0, regs);
+        break;
+    case SYS_LLISTXATTR:
+        regs->rax = sys_llistxattr((const char *)regs->rdi, (char *)regs->rsi, regs->rdx, 0, 0, 0, regs);
+        break;
     case SYS_FLISTXATTR:
-        regs->rax = (uint64_t)sys_flistxattr(regs->rdi, (char *)regs->rsi, regs->rdx, 0, 0, 0, regs);
+        regs->rax = sys_flistxattr((int)regs->rdi, (char *)regs->rsi, regs->rdx, 0, 0, 0, regs);
+        break;
+    case SYS_REMOVEXATTR:
+        regs->rax = sys_removexattr((const char *)regs->rdi, (const char *)regs->rsi, 0, 0, 0, 0, regs);
+        break;
+    case SYS_LREMOVEXATTR:
+        regs->rax = sys_lremovexattr((const char *)regs->rdi, (const char *)regs->rsi, 0, 0, 0, 0, regs);
+        break;
+    case SYS_FREMOVEXATTR:
+        regs->rax = sys_fremovexattr((int)regs->rdi, (const char *)regs->rsi, 0, 0, 0, 0, regs);
         break;
     case SYS_GETTIMEOFDAY:
         regs->rax = (uint64_t)sys_gettimeofday((struct timeval *)regs->rdi, (void *)regs->rsi, 0, 0, 0, 0, regs);
@@ -614,14 +661,8 @@ extern "C" uint64_t c_syscall_handler(struct X64_REGS *regs, uint64_t user_rsp)
         //     regs->rax = get_current_task()->parent_group->pid;
         //     break;
     case SYS_SET_TID_ADDRESS: regs->rax = (uint64_t)sys_set_tid_address((int *)regs->rdi, 0, 0, 0, 0, 0, regs); break;
-    case SYS_MOUNT:
-        regs->rax = (uint64_t)sys_mount((char *)regs->rdi, (char *)regs->rsi, (char *)regs->rdx, regs->r10, (void *)regs->r8, 0, regs);
-        break;
-    case SYS_UMOUNT2:
-        regs->rax = (uint64_t)sys_umount2(regs->rdi, regs->rsi, 0, 0, 0, 0, regs);
-        break;
-    case SYS_SET_ROBUST_LIST: regs->rax = 0; break;             /* 无 robust futex：no-op */
-    case SYS_RSEQ: regs->rax = (uint64_t)-ENOSYS; break;        /* musl 优雅降级 */
+    case SYS_SET_ROBUST_LIST: regs->rax = (uint64_t)-ENOSYS; break;
+    case SYS_RSEQ: regs->rax = (uint64_t)-ENOSYS; break;
 
 
 
@@ -634,6 +675,9 @@ extern "C" uint64_t c_syscall_handler(struct X64_REGS *regs, uint64_t user_rsp)
 
 
     /* XJ380API XAPI Edition */
+    case XAPI_NET:
+        regs->rax = (uint64_t)xnet_syscall(regs->rdi);
+        break;
     case XAPI_OUTPUT: do_xapi_Output((char *)regs->rdi); break;
     case XAPI_INPUT:
         regs->rax = (uint64_t)do_xapi_Input((char *)regs->rdi, (size_t)regs->rsi, regs->rdx);
@@ -674,8 +718,26 @@ extern "C" uint64_t c_syscall_handler(struct X64_REGS *regs, uint64_t user_rsp)
     case XAPI_GET_PIC_SIZE: case XAPI_CALC_TEXT_WIDTH:
         regs->rax = (uint64_t)-ENOSYS;
         break;
+    case XAPI_SET_SECRET:
+        regs->rax = (uint64_t)screen_capture_set_secret();
+        break;
     case XAPI_GET_VERSION: do_xapi_GetSystemVersion(regs->rdi); break;
     case XAPI_GET_TIME: regs->rax = (uint64_t)do_xapi_GetTime(); break;
+    case XAPI_LIFT_PERMISSIONS:
+        regs->rax = (uint64_t)(int64_t)(regs->rdi > XUT_Custom ? -EINVAL : permissions_lift((UserType)regs->rdi));
+        break;
+    case XAPI_GET_CURRENT_PERMISSIONS:
+    {
+        UserPermisson value = user_permissions_from_mask(permissions_current_mask());
+        tcb_t caller = get_current_task();
+        regs->rax = caller && caller->parent_group &&
+            copy_to_user_pagedir(caller->parent_group->pagedir, (void *)regs->rdi, &value, sizeof(value)) ?
+                0 : (uint64_t)-EFAULT;
+        break;
+    }
+    case XAPI_REQUEST_PERMISSIONS:
+        regs->rax = (uint64_t)(int64_t)(regs->rdi > XPERM_ALL ? -EINVAL : permissions_request(regs->rdi));
+        break;
     case XAPI_GET_CURRENT_USER: do_xapi_GetCurrentUser(regs->rdi); break;
     case XAPI_SLEEP: do_xapi_Sleep(regs->rdi); break;
     case XAPI_BROKEN: do_xapi_Broken((char *)regs->rdi); break;
@@ -685,26 +747,30 @@ extern "C" uint64_t c_syscall_handler(struct X64_REGS *regs, uint64_t user_rsp)
     case XAPI_SEND_APP_MSG: regs->rax = do_xapi_SendAppMessage((char *)regs->rdi, (char *)regs->rsi); break;
     case XAPI_RUN: do_xapi_Run((char *)regs->rdi); break;
     case XAPI_RUN_ARGS: regs->rax = do_xapi_RunArgs((char *)regs->rdi, (char **)regs->rsi); break;
+    case XAPI_SPAWN_INHERITED: regs->rax = do_xapi_SpawnInherited((char *)regs->rdi, (char **)regs->rsi); break;
+    case XAPI_QUERY_FILE_ACCESS: regs->rax = do_xapi_QueryFileAccess(regs->rdi, regs->rsi); break;
+    case XAPI_REQUEST_SPECIAL_PERMISSION: regs->rax = do_xapi_RequestSpecialPermission(regs->rdi); break;
+    case XAPI_REQUEST_FILE_ACCESS: regs->rax = do_xapi_RequestFileAccess(regs->rdi, regs->rsi, regs->rdx); break;
     case XAPI_MAP_MEMORY: regs->rax = do_xapi_MapMemory(regs->rdi, regs->rsi, regs->rdx); break;
     case XAPI_REMOVEDIR: sys_rmdir(regs->rdi, 0, 0, 0, 0, 0, regs); break;
-    case XAPI_FLUSH_TIME: do_xapi_FlushTime(); regs->rax = 0; break;
-    case XAPI_GET_TASK_LIST: regs->rax = do_xapi_GetTaskList(regs->rdi, regs->rsi); break;
-    case XAPI_KILL_PROCESS: regs->rax = do_xapi_KillProcess(regs->rdi); break;
+    case XAPI_FLUSH_TIME: regs->rax = (uint64_t)-ENOSYS; break;
+    case XAPI_GET_TASK_LIST: regs->rax = (uint64_t)-ENOSYS; break;
+    case XAPI_KILL_PROCESS: regs->rax = (uint64_t)-ENOSYS; break;
+    case XAPI_AUTH_BEGIN:
+        regs->rax = do_xapi_AuthBegin(regs->rdi, regs->rsi);
+        break;
+    case XAPI_AUTH_FINISH:
+        regs->rax = do_xapi_AuthFinish(regs->rdi, regs->rsi);
+        break;
+    case XAPI_ACCOUNT_INFO:
+        regs->rax = do_xapi_AccountInfo(regs->rdi);
+        break;
     case XAPI_USER_OOBE_REQUIRED: regs->rax = do_xapi_UserOobeRequired(); break;
     case XAPI_USER_LIST: regs->rax = do_xapi_UserList(regs->rdi, regs->rsi); break;
     case XAPI_USER_LOGIN: regs->rax = do_xapi_UserLogin(regs->rdi, regs->rsi); break;
     case XAPI_USER_CREATE_FIRST: regs->rax = do_xapi_UserCreateFirst(regs->rdi, regs->rsi); break;
     case XAPI_GET_TIME_NANO: regs->rax = nanoTime(); break;
-    case XAPI_POWER_ACTION:
-        if (EFI_ST != NULL && EFI_BC != NULL)
-        {
-            if (regs->rdi == XPOWER_SHUTDOWN)
-                power_shutdown(EFI_ST, EFI_BC);       /* [[noreturn]] */
-            else if (regs->rdi == XPOWER_REBOOT)
-                power_reboot(EFI_ST, EFI_BC);         /* [[noreturn]] */
-        }
-        regs->rax = (uint64_t)-1;
-        break;
+    case XAPI_POWER_ACTION: regs->rax = (uint64_t)-ENOSYS; break;
     case XAPI_NOTIFY_SEND: case XAPI_NOTIFY_SET_PROCOR: regs->rax = (uint64_t)-ENOSYS; break;
 
     /* Private XJ380 extension range; this is not a stable public ABI. */
@@ -714,7 +780,7 @@ extern "C" uint64_t c_syscall_handler(struct X64_REGS *regs, uint64_t user_rsp)
         // message_end();
         break;
     case SXAH_MARK_IS_TERMINAL: mark_process_is_terminal(); break;
-    case SXAH_READ_OUTPUT_BUFFER: regs->rax = read_terminal_app_output_buffer((char *)regs->rdi, (size_t)regs->rsi); break;
+    case SXAH_READ_OUTPUT_BUFFER: regs->rax = read_terminal_app_output_buffer((char *)regs->rdi); break;
     case SXAH_WRITE_INPUT_BUFFER: regs->rax = write_terminal_app_output_buffer((const char *)regs->rdi); break;
     case SXAH_CHECK_INPUT_BUFFER: regs->rax = check_input_waiting_status(); break;
     case SXAH_UNLOCK_OUTPUT_LOCK: terminal_finish_app_output(); break;
@@ -728,6 +794,9 @@ extern "C" uint64_t c_syscall_handler(struct X64_REGS *regs, uint64_t user_rsp)
     case SXAH_INSTALLER_PROGRESS: regs->rax = do_xapi_InstallerProgress(regs->rdi); break;
     case SXAH_INSTALLER_RESCUE: regs->rax = do_xapi_InstallerRescue(regs->rdi, regs->rsi, regs->rdx); break;
     case SXAH_INSTALLER_LOG: regs->rax = do_xapi_InstallerLog(regs->rdi); break;
+    case SXAH_INSTALLER_NATIVE:
+        regs->rax = do_xapi_InstallerNative(regs->rdi, regs->rsi, regs->rdx, regs->r10, regs->r8);
+        break;
     case SXAH_SET_LOG_CONFIG:
         if ((regs->rdi & ~LOG_CONFIG_VALID_MASK) != 0)
         {
@@ -740,15 +809,14 @@ extern "C" uint64_t c_syscall_handler(struct X64_REGS *regs, uint64_t user_rsp)
     case SXAH_GET_LOG_CONFIG: regs->rax = serial_log_config_get(); break;
 
     default:
-        // kmod syscall 钩子：让内核模块（如 OpenXJ380 IME 兼容层）接管内核
-        // 不认识的 syscall 号（如 XAPI_IME_* 7474-7485）。返回 true = 已处理。
-        if (OpenXJ380Socket_DispatchSyscall(syscall_number, regs)) break;
         regs->rax = (uint64_t)-ENOSYS;
         write_serial_string("Unknown syscall index: ");
         write_serial_dec(syscall_number);
         write_serial_string("\n");
         break;
     }
+    // Restore the syscall entry IRQ state before signal/TLS return bookkeeping.
+    file_io.finish();
     if (debug_trace_xbps_task() && (int64_t)regs->rax < 0)
     {
         tcb_t task = get_current_task();

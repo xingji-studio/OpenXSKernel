@@ -1,6 +1,8 @@
 #pragma once
+#include <xauth.h>
 
 #include <proto.hpp>
+#include <installer/native_protocol.h>
 
 typedef void (*MsgPrcor)(uint64_t type, uint64_t hdata, uint64_t ldata);
 
@@ -57,6 +59,7 @@ typedef struct {
 #define SXAH_INSTALLER_LOG              128956723895689226
 #define SXAH_INSTALLER_START_OPTIONS    128956723895689227
 #define SXAH_INSTALLER_PRECHECK_OPTIONS 128956723895689228
+#define SXAH_INSTALLER_NATIVE XJ_INST_NATIVE_SYSCALL
 
 #define SXAH_CHECK_TERMINAL_INIT_STATUS  3801    // 查询终端初始化状态
 
@@ -274,7 +277,7 @@ typedef void (*XApiNotifyPrcor)(uint64_t notification_id, uint64_t action_id);
 #define XWIN_TYPE_MASK          0x0f
 #define XWIN_SUPPORT_RESIZEABLE 0x80
 
-// 当前最大号：7473
+// 当前最大号：7486
 
 #define XAPI_CAPTURE_SCREEN 7473
 
@@ -330,6 +333,10 @@ void do_xapi_GetTimeX(uint64_t tt);
 uint64_t do_xapi_GetMemorySize();
 void do_xapi_Run(char *path);
 uint64_t do_xapi_RunArgs(char *path, char **argv);
+uint64_t do_xapi_SpawnInherited(char *path, char **argv);
+uint64_t do_xapi_QueryFileAccess(uint64_t path, uint64_t access);
+uint64_t do_xapi_RequestFileAccess(uint64_t path, uint64_t access, uint64_t offered);
+uint64_t do_xapi_RequestSpecialPermission(uint64_t spid);
 uint64_t do_xapi_MapMemory(uint64_t ptr, uint64_t size, uint32_t flags);
 void do_xapi_FlushTime();
 uint64_t do_xapi_GetTaskList(uint64_t buffer, uint64_t max_count);
@@ -352,24 +359,46 @@ uint64_t do_xapi_InstallerPrecheckOptions(uint64_t options, uint64_t out);
 uint64_t do_xapi_InstallerProgress(uint64_t progress);
 uint64_t do_xapi_InstallerRescue(uint64_t action, uint64_t disk_id, uint64_t out);
 uint64_t do_xapi_InstallerLog(uint64_t out);
+uint64_t do_xapi_InstallerNative(uint64_t operation, uint64_t request, uint64_t request_bytes,
+                                uint64_t response, uint64_t response_bytes);
 
 
 
 void init_syscall();
 
 // Proto (XAPI Edition)
-// 输入流路由：MSG_CHAR -> 焦点 sink（focus-agnostic，与 GUI 窗口消息投递解耦）。
-// 输入流拦截器（内核态 IME manager 注册）：返回 true = 已消费（吞掉/改道），
-// false = 放行。签名对齐上游 ime_filter_message(type, value, callback, task)，
-// 使 IME 业务能以 kmod 形式注册进来做焦点匹配。callback = (uint64_t)WinMpf。
-typedef bool (*input_interceptor_fn)(uint64_t msg_type, uint64_t lData, uint64_t callback, tcb_t task);
-void                input_route_set_interceptor(input_interceptor_fn fn);
-input_interceptor_fn input_route_interceptor(void);
-
-void input_route_dispatch(uint64_t msg_type, uint64_t hData, uint64_t lData, MsgPrcor WinMpf, tcb_t task);
-// GUI 窗口消息投递：WinMpf 回调经 message pipe 送给指定 ftask（闭源 worker 依赖此签名）。
 void do_message(uint64_t msg_type, uint64_t hData, uint64_t lData, MsgPrcor WinMpf, tcb_t ftask);
 void init_message();
 bool init_notify_message(pcb_t process, uint64_t func);
 void message_thread(uint64_t arg);
 uint64_t message_ask(uint64_t msg_type_p, uint64_t hdatap, uint64_t ldatap, uint64_t funcp, uint64_t taskp);
+
+// Input method ABI v1. MSG_CHAR continues to carry one packed UTF-8 character.
+#define XAPI_IME_REGISTER         7474
+#define XAPI_IME_ENUM             7475
+#define XAPI_IME_GET_STATE        7476
+#define XAPI_IME_SET_ACTIVE       7477
+#define XAPI_IME_UNREGISTER       7478
+#define XAPI_IME_ATTACH           7479
+#define XAPI_IME_GET_EVENT        7480
+#define XAPI_IME_REPLY_EVENT      7481
+#define XAPI_IME_UPDATE_UI        7482
+#define XAPI_IME_SET_MODE         7483
+#define XAPI_IME_SET_CONTEXT      7484
+#define XAPI_IME_USER_DATA        7485
+
+// Process-lifetime global screen capture protection.
+#define XAPI_SET_SECRET           7486
+
+#define XAPI_LIFT_PERMISSIONS 7496
+#define XAPI_GET_CURRENT_PERMISSIONS 7497
+#define XAPI_REQUEST_PERMISSIONS 7498
+#define XAPI_SPAWN_INHERITED 7499
+#define XAPI_QUERY_FILE_ACCESS 7500
+#define XAPI_REQUEST_FILE_ACCESS 7501
+
+#define XAPI_REQUEST_SPECIAL_PERMISSION 7502
+
+uint64_t do_xapi_AuthBegin(uint64_t request, uint64_t output);
+uint64_t do_xapi_AuthFinish(uint64_t request, uint64_t output);
+uint64_t do_xapi_AccountInfo(uint64_t output);
